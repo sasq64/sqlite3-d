@@ -1,0 +1,12 @@
+{
+	"name": "sqlite3if",
+	"authors": [
+		"Jonas Minnberg"
+	],
+	"description": "sqlite3 Interface",
+	"copyright": "Copyright © 2017, Jonas Minnberg",
+	"license": "MIT",
+
+	"libs": [ "sqlite3" ]
+
+}
