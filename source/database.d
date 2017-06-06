@@ -153,6 +153,8 @@ class Database
 		  */
 		public T get(T, int COL = 0)()
 		{
+			if(lastCode == -1)
+				step();
 			static if(isAggregateType!T) {
 				T t;
 				foreach(N ; FieldNameTuple!T) {

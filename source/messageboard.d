@@ -39,25 +39,25 @@ class MessageBoard
 
 	@sqlname("msggroup") struct Group
 	{
-		this(int id, string name)
+		/*this(int id, string name)
 		{
 			this.id = id;
 			this.name = name;
-		}
+		}*/
 		@sqlname("rowid") ulong id;
 		string name;
 	}
 
 	@sqlname("msgtopic") struct Topic
 	{
-		this(ulong id, ulong firstMsg, ulong group, string name, ulong creator)
+	/*	this(ulong id, ulong firstMsg, ulong group, string name, ulong creator)
 		{
 			this.id = id;
 			this.firstMsg = firstMsg;
 			this.group = group;
 			this.name = name;
 			this.creator = creator;
-		}
+		} */
 	
 		@sqlname("rowid") ulong id;
 		ulong firstMsg;
@@ -74,10 +74,13 @@ class MessageBoard
 		this.currentUser = userId;
 		init();
 		auto query = db.query("SELECT bits FROM msgbits WHERE user=?", userId);
-		void[] bits = query.get!(void[])();
-		byte[] bytes = cast(byte[])bits;
-		writefln("Length %d", bytes.length);
-		unreadMessages = BitArray(bits, bits.length * 8);
+		if(query.step()) {
+			void[] bits = query.get!(void[])();
+			byte[] bytes = cast(byte[])bits;
+			writefln("Length %d", bytes.length);
+			unreadMessages = BitArray(bits, bits.length * 8);
+		} else
+			writeln("Could not read bits");
 		//foreach(i,b ; unreadMessages)
 		//	writefln("%d : %s", i, b);
 	}
@@ -169,18 +172,23 @@ class MessageBoard
 		auto ts = getTimestamp();
 		if(currentGroup.id < 1)
 			throw new msgboard_exception("No current group");
+		
+		Topic topic = { 0, 0, currentGroup.id, topicName, currentUser };
+		db.insert(topic);
 
-		db.exec("INSERT INTO msgtopic (name,creatorid,groupid) VALUES (?, ?, ?)", topicName, currentUser, currentGroup.id);
+		//db.exec("INSERT INTO msgtopic (name,creatorid,groupid) VALUES (?, ?, ?)", topicName, currentUser, currentGroup.id);
 		auto topicid = db.lastRowid();
 		db.exec("INSERT INTO message (contents, creatorid, parentid, topicid, timestamp) VALUES (?, ?, 0, ?, ?)", text, currentUser, topicid, ts);
 		auto msgid = db.lastRowid();
 		db.exec("UPDATE msgtopic SET firstmsg=? WHERE rowid=?", msgid, topicid);
+		//db.update!(Topic).set!"firstmsg=?"(msgid).where!"rowid=?"(topicid);
 		setMessageRead(msgid);
 		return msgid;
 	}
 
 	ulong reply(ulong msgid, string text)
 	{
+		//db.select!"topicid".from!Message.where!"rowid=?"(msgid);
 		ulong topicid = db.query("SELECT topicid FROM message WHERE rowid=?", msgid).get!ulong();
 		if(topicid == 0)
 			throw new msgboard_exception("Repy failed, no such topic");
@@ -222,7 +230,11 @@ class MessageBoard
 	}
 
 	void flushBits() {
-		db.exec("INSERT OR REPLACE INTO msgbits(user, highmsg, bits) VALUES (?,?,?)", currentUser, 0, cast(void[])unreadMessages);
+		/* unreadMessages[1] = true; */
+		/* unreadMessages[11] = true; */
+		/* unreadMessages[21] = true; */
+		/* unreadMessages[31] = true; */
+		db.exec("INSERT OR REPLACE INTO msgbits(user, highmsg, bits) VALUES (?,?,?)", currentUser, 4, cast(void[])unreadMessages);
 	}
 
 	void setMessageRead(ulong no, bool read = true) {
@@ -268,16 +280,17 @@ unittest {
 
 	mb2.enterGroup("coding");
 	auto mid = mb2.post("First post", "test message");
+	writefln("MID %d", mid);
 	mb2.reply(mid, "And I am replying");
-	mb2.post("Second post", "test moar message");
+	/* mb2.post("Second post", "test moar message"); */
 
-	foreach(topic ; mb2.listTopics(gid)) {
-		writefln("%s", topic.name);
-	}
+	/* foreach(topic ; mb2.listTopics(gid)) { */
+	/* 	writefln("%s", topic.name); */
+	/* } */
 
-	auto ml = mb2.listMessages(1);
-	foreach(t ; ml)
-		writefln("Text: %s", t.text);
+	/* auto ml = mb2.listMessages(1); */
+	/* foreach(t ; ml) */
+	/* 	writefln("Text: %s", t.text); */
 }
 
 
