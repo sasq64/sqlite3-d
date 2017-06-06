@@ -111,8 +111,9 @@ struct QueryBuilder
 		this.sql = sql;
 	}
 
-	private string sqlType(T)() if(is(T == string)) { return "TEXT"; }
-	private string sqlType(T)() if(is(T == int)) { return "INT"; }
+	private string sqlType(T)() if(isSomeString!T) { return "TEXT"; }
+	private string sqlType(T)() if(isFloatingPoint!T) { return "REAL"; }
+	private string sqlType(T)() if(isIntegral!T) { return "INT"; }
 	private string sqlType(T)() if(is(T == void[])) { return "BLOB"; }
 
 
@@ -124,9 +125,9 @@ struct QueryBuilder
 		string[] fields;
 
 		foreach(I, N ; FieldNameTuple!STRUCT) {
-			enum colName = ColumnName!(STRUCT, N);
+			alias colName = ColumnName!(STRUCT, N);
 			static if(colName != "rowid")
-				fields ~= colName ~ " " ~ sqlType!(FIELDS[I])();
+				fields ~= colName ~ " " ~ sqlType!(FIELDS[I]);
 		}
 		return QueryBuilder("CREATE TABLE " ~ TABLE ~ "(" ~ join(fields, ",") ~ ")");
 	}

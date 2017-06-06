@@ -13,7 +13,7 @@ class db_exception : Exception {
 };
 
 /// Try to remove 'name', return true on success
-bool tryRemove(string name) {
+public bool tryRemove(string name) {
 	import std.file;
 	try {
 		std.file.remove(name);
@@ -86,6 +86,7 @@ class Database
 		}
 
 		private int bindArg(int pos, void[] arg) {
+			writefln("Binding BLOB at %d size %d", pos, arg.length);
 			return sqlite3_bind_blob(stmt, pos, arg.ptr, cast(int)arg.length, null);
 		}
 
@@ -105,6 +106,7 @@ class Database
 		public void bind(ARGS...)(ARGS args)
 		{
 			int bi = 1;
+			writeln(ARGS.stringof);
 			foreach(i, a ; args) {
 				int rc = bindArg(bi++, a);
 				checkError("Bind failed: ", rc);
@@ -113,9 +115,10 @@ class Database
 
 		private T getArg(T)(int pos)
 		{
+			writefln("getArg %d %s", pos, T.stringof);
 			static if(isIntegral!T)
 				return sqlite3_column_int(stmt, pos);
-			else static if(is(T string))
+			else static if(isSomeString!T)
 				return to!string(sqlite3_column_text(stmt, pos));
 			else {
 				void* ptr = cast(void*)sqlite3_column_blob(stmt, pos);
