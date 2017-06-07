@@ -291,18 +291,20 @@ class Database
 		return q.step();
 	}
 
-	QueryIterator!T select(T, string WHERE, ARGS...)(ARGS args)
+	QueryIterator!T selectAll(T, string WHERE, ARGS...)(ARGS args)
 	{
 		auto q = Query(db, QueryBuilder().selectAllFrom!T().where!WHERE());
 		q.bind(args);
 		return QueryIterator!T(q);
 	}
 
-	QueryIterator!(Tuple(TABLES)) select(TABLES...)(string where)
+
+	QueryIterator!(Tuple(TABLES)) selectAll(TABLES...)(string where)
 	{
 		auto q = Query(db, QueryBuilder().selectiAllFrom!TABLES());
 		return QueryIterator!(Tuple(TABLES))(q);
 	}
+
 
 	unittest {
 		mixin TEST!("select");
@@ -315,7 +317,7 @@ class Database
 		db.insert(User("emma", 12));
 		db.insert(User("maria", 27));
 
-		User[] users = array(db.select!(User,"age > ?")(20));
+		User[] users = array(db.selectAll!(User,"age > ?")(20));
 		auto total = fold!((a,b) => User("", a.age + b.age))(users);
 	
 		assert(total.age == 55 + 91 + 27);
@@ -397,7 +399,7 @@ unittest
 	m.id = cast(int)db.lastRowid();
 	writeln(m.id);
 
-	auto qi = db.select!(Message, "byUser == ?")(11);
+	auto qi = db.selectAll!(Message, "byUser == ?")(11);
 	writeln(qi.front());
 
 	assert(qi.front().id == m.id);

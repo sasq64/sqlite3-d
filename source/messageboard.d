@@ -119,7 +119,7 @@ class MessageBoard
 	}
 
 	Group getGroup(ulong id) {
-		auto groups = db.select!(Group,"rowid=?")(id);
+		auto groups = db.selectAll!(Group,"rowid=?")(id);
 		auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE ROWID=?", id);
 		if(q.step())
 			return q.get!Group();
@@ -219,7 +219,7 @@ class MessageBoard
 	Message[] listMessages(ulong topicId) {
 		Message[] messages;	
 
-		messages = array(db.select!(Message,"topicid = ?")(topicId));
+		messages = array(db.selectAll!(Message,"topicid = ?")(topicId));
 /*
 		auto q = db.query("SELECT rowid,contents,topicid,creatorid,parentid,timestamp FROM message WHERE topicid=?", topicId);
 		while(q.step()) {
