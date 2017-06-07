@@ -5,6 +5,7 @@ import std.conv;
 import core.stdc.string;
 import etc.c.sqlite3;
 import std.stdio;
+import std.meta;
 
 import querybuilder;
 
@@ -106,7 +107,6 @@ class Database
 		public void bind(ARGS...)(ARGS args)
 		{
 			int bi = 1;
-			writeln(ARGS.stringof);
 			foreach(i, a ; args) {
 				int rc = bindArg(bi++, a);
 				checkError("Bind failed: ", rc);
@@ -115,7 +115,6 @@ class Database
 
 		private T getArg(T)(int pos)
 		{
-			writefln("getArg %d %s", pos, T.stringof);
 			static if(isIntegral!T)
 				return sqlite3_column_int(stmt, pos);
 			else static if(isSomeString!T)
@@ -135,7 +134,6 @@ class Database
 		private int findName(string name) {
 			auto zname = toz(name);
 			for(int i=0; i<sqlite3_column_count(stmt); i++) {
-				writeln(to!string(sqlite3_column_name(stmt, i)));
 				if(strcmp(sqlite3_column_name(stmt, i), zname) == 0)
 					return i;
 			}
@@ -159,7 +157,6 @@ class Database
 				T t;
 				foreach(N ; FieldNameTuple!T) {
 					enum colName = QueryBuilder.ColumnName!(T, N);
-					writefln("%s %d", colName, findName(colName));
 					getArg(findName(colName), __traits(getMember, t, N));
 				}
 				return t;
@@ -252,6 +249,53 @@ class Database
 		}
 	}
 
+	struct Selector(FIELDS...)
+	{
+		private QueryBuilder.Selection!FIELDS qbSelection;
+		private QueryBuilder queryBuilder;
+		private sqlite3 *db;
+
+		this(sqlite3* db, QueryBuilder qb)
+		{
+			this.db = db;
+			queryBuilder = qb;
+		}
+
+		this(sqlite3* db, QueryBuilder.Selection!FIELDS selection)
+		{
+			this.db = db;
+			qbSelection = selection;
+		}
+
+		auto from(TABLES...)()
+		{
+			return Selector!FIELDS(db, qbSelection.from!TABLES());
+		}
+
+		Query where(string WHERE, ARGS...)(ARGS args)
+		{
+			auto query = Query(db, queryBuilder.where!WHERE());
+			query.bind(args);
+			return query;
+		}
+	}
+
+
+	Selector!FIELDS select(FIELDS...)()
+	{
+		return Selector!FIELDS(db, QueryBuilder().select!FIELDS());
+	}
+
+	Selector!FIELDS selectAllFrom(FIELDS...)()
+	{
+		return Selector!FIELDS(db, QueryBuilder().selectAllFrom!FIELDS());
+	}
+
+	auto select(string[] fields)()
+	{
+		alias FIELDS = aliasSeqOf!(fields); 
+		return Selector!FIELDS(db, QueryBuilder().select!FIELDS());
+	}
 
 	this(string dbFile)
 	{
@@ -298,6 +342,16 @@ class Database
 		return QueryIterator!T(q);
 	}
 
+	T selectOne(T, string WHERE, ARGS...)(ARGS args)
+	{
+		auto q = Query(db, QueryBuilder().selectAllFrom!T().where!WHERE());
+		q.bind(args);
+		if(q.step())
+			return q.get!T();
+		else
+			throw new db_exception("No match");
+	}
+
 
 	QueryIterator!(Tuple(TABLES)) selectAll(TABLES...)(string where)
 	{
@@ -322,16 +376,6 @@ class Database
 	
 		assert(total.age == 55 + 91 + 27);
 	};
-
-	static private @property uint CalcFlags(T)()
-	{
-		uint bits = 0;
-		foreach(I, N ; FieldNameTuple!T) {
-			enum CN = QueryBuilder.ColumnName!(T, N);
-			bits = bits | (CN == "rowid" ? 0 : 1<<I);
-		}
-		return bits;
-	}
 
 	bool insert(T)(T row)
 	{

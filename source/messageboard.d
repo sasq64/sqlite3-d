@@ -5,6 +5,7 @@ import std.file;
 import std.stdio;
 import std.datetime;
 import std.array;
+import std.traits;
 
 import querybuilder;
 import database;
@@ -31,58 +32,79 @@ class MessageBoard
 	{
 		@sqlname("rowid") ulong id;
 		@sqlname("contents") string text;
-		@sqlname("topicid") ulong topic;
+		@sqlname("topicid") @sqlkey("msgtopic(rowid)") ulong topic;
 		@sqlname("creatorid") ulong creator;
-		@sqlname("parentid") ulong parent;
+		@sqlname("parentid") @sqlkey("message(rowid)") ulong parent;
 		ulong timestamp;
 	}
 
 	@sqlname("msggroup") struct Group
 	{
-		/*this(int id, string name)
-		{
-			this.id = id;
-			this.name = name;
-		}*/
 		@sqlname("rowid") ulong id;
+		@sqlname("creatorid") ulong creator;
 		string name;
 	}
 
 	@sqlname("msgtopic") struct Topic
 	{
-	/*	this(ulong id, ulong firstMsg, ulong group, string name, ulong creator)
-		{
-			this.id = id;
-			this.firstMsg = firstMsg;
-			this.group = group;
-			this.name = name;
-			this.creator = creator;
-		} */
-	
 		@sqlname("rowid") ulong id;
-		ulong firstMsg;
-		@sqlname("groupid") ulong group;
+		@sqlkey("message(rowid)") ulong firstMsg;
+		@sqlname("groupid") @sqlkey("msggroup(rowid)") ulong group;
 		string name;
-		ulong creator;
+		@sqlname("creatorid") ulong creator;
+	}
+
+	@sqlname("joinedgroups") struct JoinedGroup
+	{
+		ulong user;
+		@sqlkey("msggroup(rowid)") ulong groupid;
 	}
 
 	alias BLOB = void[];
+
+	static string Field(alias FIELDNAME)()
+	{
+		enum ATTRS = __traits(getAttributes, FIELDNAME);
+		static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
+			enum ColumnName = ATTRS[0].name;
+		else
+			enum ColumnName = FIELDNAME.stringof;
+
+		return QueryBuilder.TableName!(__traits(parent, FIELDNAME)) ~ "." ~ ColumnName;
+	}
+
+
+	static void MakeFields()(ref string[])
+	{
+	}
+
+	static void MakeFields(alias FIELDNAME, FIELDNAMES...)(ref string[] fields)
+	{
+		fields ~= Field!FIELDNAME;
+		MakeFields!FIELDNAMES(fields);
+	}
+
+	static string[] Fields(FIELDNAMES...)()
+	{
+		string [] fields;
+		MakeFields!FIELDNAMES(fields);
+		return fields;
+		//return join(fields, ", ");
+	}
+
 
 	this(Database db, ulong userId)
 	{
 		this.db = db;
 		this.currentUser = userId;
 		init();
-		auto query = db.query("SELECT bits FROM msgbits WHERE user=?", userId);
+		auto query = db.select!"bits".from!"msgbits".where!"user=?"(userId);
+		//auto query = db.query("SELECT bits FROM msgbits WHERE user=?", userId);
 		if(query.step()) {
-			void[] bits = query.get!(void[])();
-			byte[] bytes = cast(byte[])bits;
-			writefln("Length %d", bytes.length);
+			void[] bits = query.get!BLOB();
 			unreadMessages = BitArray(bits, bits.length * 8);
 		} else
 			writeln("Could not read bits");
-		//foreach(i,b ; unreadMessages)
-		//	writefln("%d : %s", i, b);
 	}
 
 	ulong getTimestamp() 
@@ -90,49 +112,80 @@ class MessageBoard
 		return Clock.currTime(UTC()).stdTime;
 	}
 
+	struct MsgBits
+	{
+		@sqlkey() int user;
+		int highmsg;
+		void[] bits;
+	};
+
 	void init()
 	{
-		db.exec("CREATE TABLE IF NOT EXISTS msggroup (name TEXT, creatorid INT)");
-		db.exec("CREATE TABLE IF NOT EXISTS msgtopic (name TEXT, creatorid INT, groupid INT, firstmsg INT, FOREIGN KEY(groupid) REFERENCES msggroup(rowid), FOREIGN KEY(firstmsg) REFERENCES message(ROWID))");
-		db.exec("CREATE TABLE IF NOT EXISTS message (contents TEXT, creatorid INT, parentid INT, topicid INT, timestamp INT, FOREIGN KEY(parentid) REFERENCES message(rowid), FOREIGN KEY(topicid) REFERENCES msgtopic(ROWID))");
-		db.exec("CREATE TABLE IF NOT EXISTS joinedgroups (user INT, groupid INT, FOREIGN KEY(groupid) REFERENCES msggroup(rowid))");
-		db.exec("CREATE TABLE IF NOT EXISTS msgbits (user INT, highmsg INT, bits BLOB, PRIMARY KEY(user))");
+		import std.typetuple;
+		foreach(TABLE ; TypeTuple!(Group, Topic, Message, JoinedGroup, MsgBits))
+			db.create!TABLE();
+	
+		//db.exec("CREATE TABLE IF NOT EXISTS msggroup (name TEXT, creatorid INT)");
+		//db.exec("CREATE TABLE IF NOT EXISTS msgtopic (name TEXT, creatorid INT, groupid INT, firstmsg INT, FOREIGN KEY(groupid) REFERENCES msggroup(rowid), FOREIGN KEY(firstmsg) REFERENCES message(ROWID))");
+		//db.exec("CREATE TABLE IF NOT EXISTS message (contents TEXT, creatorid INT, parentid INT, topicid INT, timestamp INT, FOREIGN KEY(parentid) REFERENCES message(rowid), FOREIGN KEY(topicid) REFERENCES msgtopic(ROWID))");
+		//db.exec("CREATE TABLE IF NOT EXISTS joinedgroups (user INT, groupid INT, FOREIGN KEY(groupid) REFERENCES msggroup(rowid))");
+		//db.exec("CREATE TABLE IF NOT EXISTS msgbits (user INT, highmsg INT, bits BLOB, PRIMARY KEY(user))");
 	}
 
 	ulong createGroup(string name)
 	{
-		db.exec("INSERT INTO msggroup (name, creatorid) VALUES (?, ?)", name, currentUser);
+		db.insert(Group(0, currentUser, name));
+		//db.exec("INSERT INTO msggroup (name, creatorid) VALUES (?, ?)", name, currentUser);
 		return db.lastRowid();
 	}
 
 	bool joinGroup(ulong groupId)
 	{
-		auto exists = db.query("SELECT EXISTS(SELECT 1 FROM joinedgroups WHERE user=? AND groupid=?)", currentUser, groupId).get!ulong();
-		if(!exists) {
-			db.exec("INSERT OR REPLACE INTO joinedgroups(user,groupid) VALUES (?,?)", currentUser, groupId);
-			auto q = db.query("SELECT message.rowid FROM message,msgtopic WHERE msgtopic.groupid=? AND message.topicid=msgtopic.ROWID", groupId);
+		auto q0 = db.selectAllFrom!(JoinedGroup).where!"user=? AND groupid=?"(currentUser, groupId);
+
+		//auto exists = db.query("SELECT EXISTS(SELECT 1 FROM joinedgroups WHERE user=? AND groupid=?)", currentUser, groupId).get!ulong();
+		//if(!exists) {
+		if(!q0.step()) {
+			//db.exec("INSERT OR REPLACE INTO joinedgroups(user,groupid) VALUES (?,?)", currentUser, groupId);
+			JoinedGroup jg = { user : currentUser, groupid : groupId } ;
+			db.insert(jg);
+			//auto q = db.query("SELECT message.rowid FROM message,msgtopic WHERE msgtopic.groupid=? AND message.topicid=msgtopic.ROWID", groupId);
+			auto q = db.select!"Message.rowid".from!(Message,Topic).where!"msgtopic.groupid=? AND message.topicid=msgtopic.rowid"(groupId);
 			while(q.step()) {
 				unreadMessages[q.get!ulong()-1] = true;
 			}
+			return true;
 		}
-		return !exists;
+		return false;
+		//return !exists;
 	}
 
 	Group getGroup(ulong id) {
 		auto groups = db.selectAll!(Group,"rowid=?")(id);
-		auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE ROWID=?", id);
-		if(q.step())
-			return q.get!Group();
-		else
-			throw new msgboard_exception("No such group");
+		return groups.front();
+
+		//enum fields = Fields!(Group.id, Group.name, Group.creator);
+		//pragma(msg, "FIELDS " ~ fields);
+
+		//auto q = db.select!(Fields!(Group.id, Group.name, Group.creator)).from!Group.where!"rowid=?"(id);
+		//auto q = db.selectAllFrom!Group.where!"rowid=?"(id);
+
+		//auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE ROWID=?", id);
+		//if(q.step())
+		//	return q.get!Group();
+		//else
+		//	throw new msgboard_exception("No such group");
 	};
 
 	Group getGroup(string name) {
-		auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE name=?", name);
-		if(q.step())
-			return q.get!Group();
-		else
-			throw new msgboard_exception("No such group");
+
+		return db.selectOne!(Group, "name=?")(name);
+
+		/* auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE name=?", name); */
+		/* if(q.step()) */
+		/* 	return q.get!Group(); */
+		/* else */
+		/* 	throw new msgboard_exception("No such group"); */
 	};
 
 	Group enterGroup(ulong id) {
@@ -146,21 +199,23 @@ class MessageBoard
 	}
 
 	Topic getTopic(ulong id) {
-		Topic topic;
-		auto q = db.query("SELECT rowid,firstmsg,groupid,name,creatorid FROM msgtopic WHERE ROWID=?", id);
-		if(q.step())
-			return q.get!Topic();
-		else
-			throw new msgboard_exception("No such topic");
+		return db.selectOne!(Topic, "rowid=?")(id);
+		/* Topic topic; */
+		/* auto q = db.query("SELECT rowid,firstmsg,groupid,name,creatorid FROM msgtopic WHERE ROWID=?", id); */
+		/* if(q.step()) */
+		/* 	return q.get!Topic(); */
+		/* else */
+		/* 	throw new msgboard_exception("No such topic"); */
 	};
 
 	Message getMessage(ulong id)
 	{
-		auto q = db.query("SELECT rowid,contents,topicid,creatorid,parentid,timestamp FROM message WHERE ROWID=?", id);
-		if(q.step())
-			return q.get!Message();
-		else
-			throw new msgboard_exception("No such message");
+		return db.selectOne!(Message, "rowid=?")(id);
+		/* auto q = db.query("SELECT rowid,contents,topicid,creatorid,parentid,timestamp FROM message WHERE ROWID=?", id); */
+		/* if(q.step()) */
+		/* 	return q.get!Message(); */
+		/* else */
+		/* 	throw new msgboard_exception("No such message"); */
 	}
 
 	ulong post(string topicName, string text)
@@ -169,7 +224,7 @@ class MessageBoard
 		scope(failure) db.rollback();
 		scope(success) db.commit();
 
-		auto ts = getTimestamp();
+	//	auto ts = getTimestamp();
 		if(currentGroup.id < 1)
 			throw new msgboard_exception("No current group");
 		
@@ -178,8 +233,12 @@ class MessageBoard
 
 		//db.exec("INSERT INTO msgtopic (name,creatorid,groupid) VALUES (?, ?, ?)", topicName, currentUser, currentGroup.id);
 		auto topicid = db.lastRowid();
-		db.exec("INSERT INTO message (contents, creatorid, parentid, topicid, timestamp) VALUES (?, ?, 0, ?, ?)", text, currentUser, topicid, ts);
+		Message msg = { text : text, creator : currentUser, topic : topicid, timestamp : getTimestamp() };
+		db.insert(msg);
+		//db.exec("INSERT INTO message (contents, creatorid, parentid, topicid, timestamp) VALUES (?, ?, 0, ?, ?)", text, currentUser, topicid, ts);
 		auto msgid = db.lastRowid();
+		//db.update!Topic.set"firstmsg=?"(msgid).where!"rowid=?"(topicid);
+
 		db.exec("UPDATE msgtopic SET firstmsg=? WHERE rowid=?", msgid, topicid);
 		//db.update!(Topic).set!"firstmsg=?"(msgid).where!"rowid=?"(topicid);
 		setMessageRead(msgid);
@@ -189,12 +248,19 @@ class MessageBoard
 	ulong reply(ulong msgid, string text)
 	{
 		//db.select!"topicid".from!Message.where!"rowid=?"(msgid);
-		ulong topicid = db.query("SELECT topicid FROM message WHERE rowid=?", msgid).get!ulong();
+		//ulong topicid = db.query("SELECT topicid FROM message WHERE rowid=?", msgid).get!ulong();
+		enum field = Field!(Message.topic);
+		auto topicid = db.select!(Fields!(Message.topic)).from!Message.where!"rowid=?"(msgid).get!ulong();
+
+
 		if(topicid == 0)
 			throw new msgboard_exception("Repy failed, no such topic");
 	
-		auto ts = getTimestamp();
-		db.exec("INSERT INTO message (contents, creatorid, parentid, topicid, timestamp) VALUES (?, ?, ?, ?, ?)", text, currentUser, msgid, topicid, ts);
+		//auto ts = getTimestamp();
+		//db.exec("INSERT INTO message (contents, creatorid, parentid, topicid, timestamp) VALUES (?, ?, ?, ?, ?)", text, currentUser, msgid, topicid, ts);
+		Message msg = { text : text, creator : currentUser, parent : msgid, topic : topicid, timestamp : getTimestamp() };
+		db.insert(msg);
+
 		msgid = db.lastRowid();
 		setMessageRead(msgid);
 		return msgid;		
@@ -204,13 +270,17 @@ class MessageBoard
 	{
 		Topic[] topics;
 		bool[ulong] found;
-		auto q = db.query("SELECT message.rowid,topicid,message.creatorid,timestamp FROM message,msgtopic WHERE topicid=msgtopic.ROWID AND msgtopic.groupid=?", group);
+		//auto q = db.query("SELECT topicid FROM message,msgtopic WHERE topicid=msgtopic.ROWID AND msgtopic.groupid=?", group);
+		//auto q = db.selectAllFrom!(Message, Topic).where!"topicid=msgtopic.rowid AND msgtopic.groupid=?"(group);
+		auto q = db.select!"topicid".from!(Message, Topic).where!"topicid=msgtopic.rowid AND msgtopic.groupid=?"(group);
+
 		while(q.step()) {
-			auto t = q.get!(ulong,ulong,ulong,ulong);
-			auto topicid = t[1];
-			if(!(topicid in found)) {
-				topics ~= getTopic(topicid);
-				found[topicid] = true;
+			auto message = q.get!(Message);
+			//auto t = q.get!(ulong,ulong,ulong,ulong);
+			//auto topicid = t[1];
+			if(!(message.topic in found)) {
+				topics ~= getTopic(message.topic);
+				found[message.topic] = true;
 			}
 		}
 		return topics;
@@ -282,15 +352,15 @@ unittest {
 	auto mid = mb2.post("First post", "test message");
 	writefln("MID %d", mid);
 	mb2.reply(mid, "And I am replying");
-	/* mb2.post("Second post", "test moar message"); */
+	mb2.post("Second post", "test moar message");
 
-	/* foreach(topic ; mb2.listTopics(gid)) { */
-	/* 	writefln("%s", topic.name); */
-	/* } */
+	foreach(topic ; mb2.listTopics(gid)) {
+		writefln("%s", topic.name);
+	}
 
-	/* auto ml = mb2.listMessages(1); */
-	/* foreach(t ; ml) */
-	/* 	writefln("Text: %s", t.text); */
+	auto ml = mb2.listMessages(1);
+	foreach(t ; ml)
+		writefln("Text: %s", t.text);
 }
 
 

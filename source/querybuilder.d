@@ -11,7 +11,8 @@ enum QueryState {
 	Insert
 };
 
-struct sqlname { string name; }; 
+struct sqlname { string name; }
+struct sqlkey { string key; }
 
 ///
 mixin template TEST() {
@@ -53,6 +54,26 @@ unittest {
 /// Utility class for generating SQL statements from compile time information.
 struct QueryBuilder
 {
+	@property static private bool allString(STRING...)() {
+		bool ok = true;
+		foreach(S ; STRING)
+			static if(is(S))
+				ok = false;
+			else
+				ok &= isSomeString!(typeof(S));
+		return ok;
+	}
+
+	@property static private bool allAggregate(ARGS...)() {
+		bool ok = true;
+		foreach(A ; ARGS)
+			static if(is(A))
+				ok &= isAggregateType!A;
+			else
+				ok = false;
+		return ok;
+	}
+
 	/** Generate the table name given STRUCT. Will return the STRUCT name,
 	 * unless the struct has an @sqlname property renaming it to something else.
 	 */
@@ -77,13 +98,15 @@ struct QueryBuilder
 	struct Selection(FIELDS...)
 	{
 		/// Generate a $(B SELECT) statement by appending a $(B FROM) to the fields in the selection, verifying at compile time that each field maps to some field in some STRUCT.
-		QueryBuilder from(TABLES...)()
+		QueryBuilder from(TABLES...)() if(allAggregate!TABLES)
 		{
 			pure bool isOK(string F)() {
 				bool ok = false;
 				foreach(TABLE ; TABLES) {
+					enum tableName = TableName!TABLE;
 					foreach(N ; FieldNameTuple!TABLE) {
-						ok |= (ColumnName!(TABLE,N) == F);
+						enum colName = ColumnName!(TABLE,N);
+						ok |= ((colName == F) || ( tableName ~ "." ~ colName == F)); 
 					}
 				}
 				return ok;
@@ -99,6 +122,10 @@ struct QueryBuilder
 				tables ~= TableName!STRUCT;
 
 			return This("SELECT " ~ join([FIELDS], ",") ~ " FROM " ~ join(tables, ","));
+		}
+
+		QueryBuilder from(TABLES...)() if(allString!TABLES) {
+			return This("SELECT " ~ join([FIELDS], ",") ~ " FROM " ~ join([TABLES], ","));
 		}
 	}
 
@@ -123,20 +150,32 @@ struct QueryBuilder
 		enum TABLE = TableName!STRUCT;
 		alias FIELDS = Fields!STRUCT;
 		string[] fields;
+		string[] keys;
 
 		foreach(I, N ; FieldNameTuple!STRUCT) {
 			alias colName = ColumnName!(STRUCT, N);
 			static if(colName != "rowid")
 				fields ~= colName ~ " " ~ sqlType!(FIELDS[I]);
+			enum ATTRS = __traits(getAttributes, __traits(getMember, STRUCT, N));
+			foreach(A ; ATTRS)
+				static if(is(typeof(A) == sqlkey)) {
+					static if(A.key == "")
+						keys ~= "PRIMARY KEY(" ~ colName ~ ")";
+					else
+						keys ~= "FOREIGN KEY(" ~ colName ~ ") REFERENCES " ~ A.key;
+				}
 		}
-		return QueryBuilder("CREATE TABLE " ~ TABLE ~ "(" ~ join(fields, ",") ~ ")");
+
+		fields ~= keys;
+
+		return QueryBuilder("CREATE TABLE IF NOT EXISTS " ~ TABLE ~ "(" ~ join(fields, ", ") ~ ")");
 	}
 
 	///
 	unittest {
 		mixin TEST;
 
-		assert(QueryBuilder().create!User() == "CREATE TABLE User(name TEXT,len INT)");
+		assert(QueryBuilder().create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, len INT)");
 		assert(!__traits(compiles, QueryBuilder().create!int));
 	}
 
@@ -170,12 +209,6 @@ struct QueryBuilder
 		assert(QueryBuilder().insert!User() == "INSERT INTO User(name,len) VALUES(?,?)");
 	}
 
-	@property static private bool allString(STRING...)() {
-		bool ok = true;
-		foreach(S ; STRING)
-			ok &= isSomeString!(typeof(S));
-		return ok;
-	}
 
 
 	/** Generate the start of a $(B SELECT) statement for selecting the given fields. */
@@ -205,7 +238,7 @@ struct QueryBuilder
 
 
 	/// SELECT all FROM
-	@property public This selectAllFrom(T...)()
+	public This selectAllFrom(T...)()
 	{
 		string[] fields;
 		string[] tables;
@@ -256,7 +289,7 @@ unittest {
 	alias QB = QueryBuilder;
 
 	assert(QB().select!"content".from!Message.where!"idx == ?" == "SELECT content FROM Message WHERE idx == ?");
-	assert(QB().create!Message == "CREATE TABLE Message(id INT,content TEXT)");
+	assert(QB().create!Message == "CREATE TABLE IF NOT EXISTS Message(id INT, content TEXT)");
 
 	assert(__traits(compiles, QB().select!("id", "content").from!Message));
 	assert(!__traits(compiles, QB().select!("id", "conxtent").from!Message));
