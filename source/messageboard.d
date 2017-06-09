@@ -1,4 +1,3 @@
-import database;
 import std.bitmanip;
 import std.typecons;
 import std.file;
@@ -62,43 +61,12 @@ class MessageBoard
 
 	alias BLOB = void[];
 
-	static string Field(alias FIELDNAME)()
-	{
-		enum ATTRS = __traits(getAttributes, FIELDNAME);
-		static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
-			enum ColumnName = ATTRS[0].name;
-		else
-			enum ColumnName = FIELDNAME.stringof;
-
-		return QueryBuilder.TableName!(__traits(parent, FIELDNAME)) ~ "." ~ ColumnName;
-	}
-
-
-	static void MakeFields()(ref string[])
-	{
-	}
-
-	static void MakeFields(alias FIELDNAME, FIELDNAMES...)(ref string[] fields)
-	{
-		fields ~= Field!FIELDNAME;
-		MakeFields!FIELDNAMES(fields);
-	}
-
-	static string[] Fields(FIELDNAMES...)()
-	{
-		string [] fields;
-		MakeFields!FIELDNAMES(fields);
-		return fields;
-		//return join(fields, ", ");
-	}
-
-
 	this(Database db, ulong userId)
 	{
 		this.db = db;
 		this.currentUser = userId;
 		init();
-		auto query = db.select!"bits".from!"msgbits".where!"user=?"(userId);
+		auto query = db.query(QB.select!"bits".from!"msgbits".where!"user=?"(userId));
 		//auto query = db.query("SELECT bits FROM msgbits WHERE user=?", userId);
 		if(query.step()) {
 			void[] bits = query.get!BLOB();
@@ -141,16 +109,16 @@ class MessageBoard
 
 	bool joinGroup(ulong groupId)
 	{
-		auto q0 = db.selectAllFrom!(JoinedGroup).where!"user=? AND groupid=?"(currentUser, groupId);
+		auto q0 = db.selectAllWhere!(JoinedGroup, "user=? AND groupid=?")(currentUser, groupId);
 
 		//auto exists = db.query("SELECT EXISTS(SELECT 1 FROM joinedgroups WHERE user=? AND groupid=?)", currentUser, groupId).get!ulong();
 		//if(!exists) {
-		if(!q0.step()) {
+		if(q0.empty()) {
 			//db.exec("INSERT OR REPLACE INTO joinedgroups(user,groupid) VALUES (?,?)", currentUser, groupId);
 			JoinedGroup jg = { user : currentUser, groupid : groupId } ;
 			db.insert(jg);
 			//auto q = db.query("SELECT message.rowid FROM message,msgtopic WHERE msgtopic.groupid=? AND message.topicid=msgtopic.ROWID", groupId);
-			auto q = db.select!"Message.rowid".from!(Message,Topic).where!"msgtopic.groupid=? AND message.topicid=msgtopic.rowid"(groupId);
+			auto q = db.query(QB.select!"Message.rowid".from!(Message,Topic).where!"msgtopic.groupid=? AND message.topicid=msgtopic.rowid"(groupId));
 			while(q.step()) {
 				unreadMessages[q.get!ulong()-1] = true;
 			}
@@ -161,7 +129,7 @@ class MessageBoard
 	}
 
 	Group getGroup(ulong id) {
-		auto groups = db.selectAll!(Group,"rowid=?")(id);
+		auto groups = db.selectAllWhere!(Group,"rowid=?")(id);
 		return groups.front();
 
 		//enum fields = Fields!(Group.id, Group.name, Group.creator);
@@ -179,7 +147,7 @@ class MessageBoard
 
 	Group getGroup(string name) {
 
-		return db.selectOne!(Group, "name=?")(name);
+		return db.selectOneWhere!(Group, "name=?")(name);
 
 		/* auto q = db.query("SELECT rowid,name,creatorid FROM msggroup WHERE name=?", name); */
 		/* if(q.step()) */
@@ -199,7 +167,7 @@ class MessageBoard
 	}
 
 	Topic getTopic(ulong id) {
-		return db.selectOne!(Topic, "rowid=?")(id);
+		return db.selectOneWhere!(Topic, "rowid=?")(id);
 		/* Topic topic; */
 		/* auto q = db.query("SELECT rowid,firstmsg,groupid,name,creatorid FROM msgtopic WHERE ROWID=?", id); */
 		/* if(q.step()) */
@@ -210,7 +178,7 @@ class MessageBoard
 
 	Message getMessage(ulong id)
 	{
-		return db.selectOne!(Message, "rowid=?")(id);
+		return db.selectOneWhere!(Message, "rowid=?")(id);
 		/* auto q = db.query("SELECT rowid,contents,topicid,creatorid,parentid,timestamp FROM message WHERE ROWID=?", id); */
 		/* if(q.step()) */
 		/* 	return q.get!Message(); */
@@ -249,8 +217,8 @@ class MessageBoard
 	{
 		//db.select!"topicid".from!Message.where!"rowid=?"(msgid);
 		//ulong topicid = db.query("SELECT topicid FROM message WHERE rowid=?", msgid).get!ulong();
-		enum field = Field!(Message.topic);
-		auto topicid = db.select!(Fields!(Message.topic)).from!Message.where!"rowid=?"(msgid).get!ulong();
+		enum field = ColumnName!(Message.topic);
+		auto topicid = db.query(QB.select!(ColumnName!(Message.topic)).from!Message.where!"rowid=?"(msgid)).get!ulong();
 
 
 		if(topicid == 0)
@@ -272,7 +240,7 @@ class MessageBoard
 		bool[ulong] found;
 		//auto q = db.query("SELECT topicid FROM message,msgtopic WHERE topicid=msgtopic.ROWID AND msgtopic.groupid=?", group);
 		//auto q = db.selectAllFrom!(Message, Topic).where!"topicid=msgtopic.rowid AND msgtopic.groupid=?"(group);
-		auto q = db.select!"topicid".from!(Message, Topic).where!"topicid=msgtopic.rowid AND msgtopic.groupid=?"(group);
+		auto q = db.query(QB.select!"topicid".from!(Message, Topic).where!"topicid=msgtopic.rowid AND msgtopic.groupid=?"(group));
 
 		while(q.step()) {
 			auto message = q.get!(Message);
@@ -289,7 +257,7 @@ class MessageBoard
 	Message[] listMessages(ulong topicId) {
 		Message[] messages;	
 
-		messages = array(db.selectAll!(Message,"topicid = ?")(topicId));
+		messages = array(db.selectAllWhere!(Message,"topicid = ?")(topicId));
 /*
 		auto q = db.query("SELECT rowid,contents,topicid,creatorid,parentid,timestamp FROM message WHERE topicid=?", topicId);
 		while(q.step()) {

@@ -9,6 +9,10 @@ import std.meta;
 
 import querybuilder;
 
+//pragma(lib, "sqlite3");
+
+alias QB = QueryBuilder!(Empty);
+
 class db_exception : Exception {
 	this(string msg, string file = __FILE__, size_t line = __LINE__) { super(msg, file, line); }
 };
@@ -156,7 +160,7 @@ class Database
 			static if(isAggregateType!T) {
 				T t;
 				foreach(N ; FieldNameTuple!T) {
-					enum colName = QueryBuilder.ColumnName!(T, N);
+					enum colName = ColumnName!(T, N);
 					getArg(findName(colName), __traits(getMember, t, N));
 				}
 				return t;
@@ -165,7 +169,7 @@ class Database
 		}
 
 		/// Get current row as a tuple
-		Tuple!T get(T...)()
+		public Tuple!T get(T...)()
 		{
 			Tuple!(T) t;
 			foreach(I, Ti ; T)
@@ -174,14 +178,14 @@ class Database
 		}
 
 		/// Step the SQL statement, return `false` if there are no more rows
-		bool step()
+		public bool step()
 		{
 			lastCode = sqlite3_step(stmt);
 			checkError("Step failed", lastCode);
 			return (lastCode == SQLITE_ROW);
 		}
 
-		void reset()
+		public void reset()
 		{
 			sqlite3_reset(stmt);
 		}
@@ -249,55 +253,7 @@ class Database
 		}
 	}
 
-	struct Selector(FIELDS...)
-	{
-		private QueryBuilder.Selection!FIELDS qbSelection;
-		private QueryBuilder queryBuilder;
-		private sqlite3 *db;
-
-		this(sqlite3* db, QueryBuilder qb)
-		{
-			this.db = db;
-			queryBuilder = qb;
-		}
-
-		this(sqlite3* db, QueryBuilder.Selection!FIELDS selection)
-		{
-			this.db = db;
-			qbSelection = selection;
-		}
-
-		auto from(TABLES...)()
-		{
-			return Selector!FIELDS(db, qbSelection.from!TABLES());
-		}
-
-		Query where(string WHERE, ARGS...)(ARGS args)
-		{
-			auto query = Query(db, queryBuilder.where!WHERE());
-			query.bind(args);
-			return query;
-		}
-	}
-
-
-	Selector!FIELDS select(FIELDS...)()
-	{
-		return Selector!FIELDS(db, QueryBuilder().select!FIELDS());
-	}
-
-	Selector!FIELDS selectAllFrom(FIELDS...)()
-	{
-		return Selector!FIELDS(db, QueryBuilder().selectAllFrom!FIELDS());
-	}
-
-	auto select(string[] fields)()
-	{
-		alias FIELDS = aliasSeqOf!(fields); 
-		return Selector!FIELDS(db, QueryBuilder().select!FIELDS());
-	}
-
-	this(string dbFile)
+	public this(string dbFile)
 	{
 		int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
 		int rc = sqlite3_open_v2(toz(dbFile), &db, flags, null);
@@ -305,60 +261,61 @@ class Database
 			throw new db_exception("Could not open database");
 	}
 
-	bool hasTable(string table)
+	public bool hasTable(string table)
 	{
 		return query("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).step();
 	}
 
-	long lastRowid()
+	public long lastRowid()
 	{
 		return sqlite3_last_insert_rowid(db);
 	}
 
-	bool exec(T...)(string sql, T args)
+	public bool exec(T...)(string sql, T args)
 	{
 		auto q = Query(db, sql);
 		q.bind(args);
 		return q.step();
 	}
 
-	Query query(T...)(string sql, T args)
+	public Query query(T...)(string sql, T args)
 	{
 		auto q = Query(db, sql);
 		q.bind(args);
 		return q;
 	}
 
-	bool create(T)()
+	public Query query(SOMEQUERY)(SOMEQUERY sq) if(hasMember!(SOMEQUERY, "sql") && hasMember!(SOMEQUERY, "binds"))
 	{
-		auto q = Query(db, QueryBuilder().create!T);
+		auto q = Query(db, sq.sql);
+		q.bind(sq.binds.expand);
+		//auto q = Query(db, "select name from user");
+		return q;
+
+	}
+
+	public bool create(T)()
+	{
+		auto q = Query(db, QB.create!T());
 		return q.step();
 	}
 
-	QueryIterator!T selectAll(T, string WHERE, ARGS...)(ARGS args)
+	public QueryIterator!T selectAllWhere(T, string WHERE, ARGS...)(ARGS args)
 	{
-		auto q = Query(db, QueryBuilder().selectAllFrom!T().where!WHERE());
+		auto q = Query(db, QB.selectAllFrom!T.where!WHERE(args));
 		q.bind(args);
 		return QueryIterator!T(q);
 	}
 
-	T selectOne(T, string WHERE, ARGS...)(ARGS args)
+	public T selectOneWhere(T, string WHERE, ARGS...)(ARGS args)
 	{
-		auto q = Query(db, QueryBuilder().selectAllFrom!T().where!WHERE());
+		auto q = Query(db, QB.selectAllFrom!T().where!WHERE(args));
 		q.bind(args);
 		if(q.step())
 			return q.get!T();
 		else
 			throw new db_exception("No match");
 	}
-
-
-	QueryIterator!(Tuple(TABLES)) selectAll(TABLES...)(string where)
-	{
-		auto q = Query(db, QueryBuilder().selectiAllFrom!TABLES());
-		return QueryIterator!(Tuple(TABLES))(q);
-	}
-
 
 	unittest {
 		mixin TEST!("select");
@@ -371,7 +328,7 @@ class Database
 		db.insert(User("emma", 12));
 		db.insert(User("maria", 27));
 
-		User[] users = array(db.selectAll!(User,"age > ?")(20));
+		User[] users = array(db.selectAllWhere!(User, "age > ?")(20));
 		auto total = fold!((a,b) => User("", a.age + b.age))(users);
 	
 		assert(total.age == 55 + 91 + 27);
@@ -379,22 +336,19 @@ class Database
 
 	bool insert(T)(T row)
 	{
-		enum sql = QueryBuilder().insert!T();
+		auto qb = QB.insert(row);
 		Query q;
 		try {
-			q = Query(db, sql);
+			q = Query(db, qb);
 		} catch(db_exception dbe) {
-			if(!hasTable(QueryBuilder.TableName!T)) {
+			if(!hasTable(TableName!T)) {
 				create!T();
-				q = Query(db, sql);
+				q = Query(db, qb);
 			} else
 				return false;
 		}
-		uint bits = 0;
-		foreach(i, N ; FieldNameTuple!T) {
-			bits |= (QueryBuilder.ColumnName!(T, N) == "rowid" ? 0 : 1<<i);
-		}
-		q.bind(row, bits);
+
+		q.bind(qb.binds.expand);
 		return q.step();
 	}
 
@@ -425,7 +379,11 @@ unittest
 	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "spacey", 15);
 	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "joker", 42);
 	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "rastapopoulos", 67);
-	auto q = db.query("SELECT name, age FROM 'user' WHERE age == ?", 42);
+
+
+	auto q = db.query(QB.select!("name", "age").from!"user".where!"age == ?"(42));
+	//auto q = db.query("SELECT name, age FROM 'user' WHERE age == ?", 42);
+
 
 	string[] names;
 //	foreach(user ; db.select!User("where age > ?", 20))
@@ -439,11 +397,11 @@ unittest
 
 	db.create!Message();
 	Message m = { -1, "Some text", 11 };
-	db.insert!Message(m);
+	db.insert(m);
 	m.id = cast(int)db.lastRowid();
 	writeln(m.id);
 
-	auto qi = db.selectAll!(Message, "byUser == ?")(11);
+	auto qi = db.selectAllWhere!(Message, "byUser == ?")(11);
 	writeln(qi.front());
 
 	assert(qi.front().id == m.id);

@@ -3,149 +3,148 @@ import std.traits;
 import std.string;
 import std.conv;
 import std.meta;
-
-
-enum QueryState {
-	Empty,
-	Create,
-	Insert
-};
+import std.stdio;
+import std.algorithm.iteration : map;
+import std.array : array;
 
 struct sqlname { string name; }
 struct sqlkey { string key; }
 
-///
-mixin template TEST() {
-	struct Message {
-		int id;
-		string content;
-	}
-
-	struct User {
-		string name; 
-		@sqlname("len") int lengthInFeet;
-	}
-
-	@sqlname("DATA") struct MyData {
-		int id;
-		@sqlname("data") void[] blob;
-	};
-}
-
-/// Common setup
-unittest {
-	struct Message {
-		int id;
-		string content;
-	}
-
-	struct User {
-		string name; 
-		@sqlname("len") int lengthInFeet;
-	}
-
-	@sqlname("DATA") struct MyData {
-		int id;
-		@sqlname("data") void[] blob;
-	}
-}
-
-
-/// Utility class for generating SQL statements from compile time information.
-struct QueryBuilder
+version(unittest)
 {
-	@property static private bool allString(STRING...)() {
-		bool ok = true;
-		foreach(S ; STRING)
-			static if(is(S))
-				ok = false;
-			else
-				ok &= isSomeString!(typeof(S));
-		return ok;
+	struct User {
+		string name;
+		int age;
 	}
 
-	@property static private bool allAggregate(ARGS...)() {
-		bool ok = true;
-		foreach(A ; ARGS)
-			static if(is(A))
-				ok &= isAggregateType!A;
-			else
-				ok = false;
-		return ok;
+	@sqlname("msg") struct Message {
+		@sqlname("rowid") int id;
+		string contents;
 	}
+}
 
-	/** Generate the table name given STRUCT. Will return the STRUCT name,
-	 * unless the struct has an @sqlname property renaming it to something else.
-	 */
-	static public template TableName(STRUCT) {
-		enum ATTRS = __traits(getAttributes, STRUCT);
-		static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname)) {
-			enum TableName = ATTRS[0].name;
-		} else
-			enum TableName = STRUCT.stringof;
-	};
+@property static bool allString(STRING...)() {
+	bool ok = true;
+	foreach(S ; STRING)
+		static if(is(S))
+		ok = false;
+	else
+		ok &= isSomeString!(typeof(S));
+	return ok;
+}
 
-	/// Generate a column name given a FIELD in STRUCT.
-	static public template ColumnName(STRUCT, string FIELD) {
-		enum ATTRS = __traits(getAttributes, __traits(getMember, STRUCT, FIELD));
-		static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
-			enum ColumnName = ATTRS[0].name;
-		else
-			enum ColumnName = FIELD;
-	}
+@property static bool allAggregate(ARGS...)() {
+	bool ok = true;
+	foreach(A ; ARGS)
+		static if(is(A))
+		ok &= isAggregateType!A;
+	else
+		ok = false;
+	return ok;
+}
 
-	/// Represents a set of fields for a SELECT statement
-	struct Selection(FIELDS...)
-	{
-		/// Generate a $(B SELECT) statement by appending a $(B FROM) to the fields in the selection, verifying at compile time that each field maps to some field in some STRUCT.
-		QueryBuilder from(TABLES...)() if(allAggregate!TABLES)
-		{
-			pure bool isOK(string F)() {
-				bool ok = false;
-				foreach(TABLE ; TABLES) {
-					enum tableName = TableName!TABLE;
-					foreach(N ; FieldNameTuple!TABLE) {
-						enum colName = ColumnName!(TABLE,N);
-						ok |= ((colName == F) || ( tableName ~ "." ~ colName == F)); 
-					}
-				}
-				return ok;
-			}
 
-			foreach(F ; FIELDS) {
-				static assert(isOK!F(), "Field '" ~ F ~ "' not found in " ~ join([TABLES.stringof], ","));
-			}
+/// Get the tablename of a STRUCT
+static template TableName(STRUCT) {
+	enum ATTRS = __traits(getAttributes, STRUCT);
+	static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname)) {
+		enum TableName = ATTRS[0].name;
+	} else
+		enum TableName = STRUCT.stringof;
+};
 
-			string[] tables;
+unittest {
+	assert(TableName!User == "User");
+	assert(TableName!Message == "msg");
+}
 
-			foreach(I, STRUCT ; TABLES)
-				tables ~= TableName!STRUCT;
+/// Generate a column name given a FIELD in STRUCT.
+static template ColumnName(STRUCT, string FIELD) if(isAggregateType!STRUCT) {
+	enum ATTRS = __traits(getAttributes, __traits(getMember, STRUCT, FIELD));
+	static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
+		enum ColumnName = ATTRS[0].name;
+	else
+		enum ColumnName = FIELD;
+}
 
-			return This("SELECT " ~ join([FIELDS], ",") ~ " FROM " ~ join(tables, ","));
-		}
+/// Return the qualifed column name of the given struct field
+static template ColumnName(alias FIELDNAME)
+{
+	enum ATTRS = __traits(getAttributes, FIELDNAME);
+	static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
+		enum CN = ATTRS[0].name;
+	else
+		enum CN = FIELDNAME.stringof;
 
-		QueryBuilder from(TABLES...)() if(allString!TABLES) {
-			return This("SELECT " ~ join([FIELDS], ",") ~ " FROM " ~ join([TABLES], ","));
-		}
-	}
+	enum ColumnName = TableName!(__traits(parent, FIELDNAME)) ~ "." ~ CN;
+}
 
-	alias This = QueryBuilder;
-	public const string sql;
+unittest {
+	assert(ColumnName!(User, "age") == "age");
+	assert(tuple(ColumnName!(Message.contents), ColumnName!(User.age)) == tuple("msg.contents", "User.age"));
+}
+
+enum {
+	Select, Set, Empty, SetWhere, From, SelectWhere, Update, Create, Insert
+};
+
+enum OrAction {
+	Rollback, Abort, Replace, Fail, Ignore
+}
+
+/** An instance of a query building process */
+struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
+{
+	BINDS args;
+	public string sql;
 	alias sql this;
 
-	this(string sql)
-	{
-		this.sql = sql;
+	//@property public string text() { return sql; }
+	@property public BINDS binds() { return args; }
+
+	private static bool checkField(string F, TABLES...)() {
+		bool ok = false;
+		foreach(TABLE ; TABLES) {
+			enum tableName = TableName!TABLE;
+			foreach(N ; FieldNameTuple!TABLE) {
+				enum colName = ColumnName!(TABLE,N);
+				ok |= ((colName == F) || (tableName ~ "." ~ colName == F)); 
+			}
+		}
+		return ok;
 	}
 
-	private string sqlType(T)() if(isSomeString!T) { return "TEXT"; }
-	private string sqlType(T)() if(isFloatingPoint!T) { return "REAL"; }
-	private string sqlType(T)() if(isIntegral!T) { return "INT"; }
-	private string sqlType(T)() if(is(T == void[])) { return "BLOB"; }
+	private static bool checkFields(string[] FIELDS, TABLES...)()
+	{
+		static if(FIELDS.length > 1)
+			return checkField!(FIELDS[0], TABLES) && checkFields!(FIELDS[1..$], TABLES);
+		else
+			return checkField!(FIELDS[0], TABLES);
+	}
 
+	private static string sqlType(T)() if(isSomeString!T) { return "TEXT"; }
+	private static string sqlType(T)() if(isFloatingPoint!T) { return "REAL"; }
+	private static string sqlType(T)() if(isIntegral!T) { return "INT"; }
+	private static string sqlType(T)() if(is(T == void[])) { return "BLOB"; }
 
-	/// Generate a CREATE TABLE statement from the given $(I STRUCT)
-	@property public This create(STRUCT)() if(isAggregateType!STRUCT)
+	private static auto make(int STATE = Empty, string[] SELECTS = [], BINDS)(string sql, BINDS binds)
+	{
+		return QueryBuilder!(STATE, BINDS, SELECTS)(sql, binds);
+	}
+
+	private mixin template VerifyParams(string what, ARGS...)
+	{
+		static assert(countchars(what, "?") == A.length, "Incorrect number parameters");
+	}
+
+	this(string sql, BINDS args)
+	{
+		//pragma(msg, BINDS);
+		this.sql = sql;
+		this.args = args;
+	}
+
+	public static auto create(STRUCT)() if(isAggregateType!STRUCT)
 	{
 		enum TABLE = TableName!STRUCT;
 		alias FIELDS = Fields!STRUCT;
@@ -168,81 +167,68 @@ struct QueryBuilder
 
 		fields ~= keys;
 
-		return QueryBuilder("CREATE TABLE IF NOT EXISTS " ~ TABLE ~ "(" ~ join(fields, ", ") ~ ")");
+		return make!(Create)("CREATE TABLE IF NOT EXISTS " ~ TABLE ~ "(" ~ join(fields, ", ") ~ ")", tuple());
 	}
 
 	///
 	unittest {
-		mixin TEST;
-
-		assert(QueryBuilder().create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, len INT)");
+		assert(QueryBuilder.create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, age INT)");
 		assert(!__traits(compiles, QueryBuilder().create!int));
 	}
 
-
-
-	/// Append $(B IF NOT EXIST) to the $(B CREATE) statement
-	@property public This ifNotExists() {
-		return This(sql ~ " IF NOT EXISTS");
-	}
-
-	/** Generate the start of an $(B INSERT) statement from the given $(I STRUCT). Needs
-	* to be completed with a $(B VALUES) suffix.
-	*/
-	@property public This insert(STRUCT)()
+	// Get all field names in `s` to `fields`, and return the contents
+	// of all fields as a tuple. Skips "rowid" fields.
+	static auto getFields(STRUCT, int n = 0)(STRUCT s, ref string []fields)
 	{
-		string[] fields;
-		string[] qms;
-		foreach(N ; FieldNameTuple!STRUCT) {
-			enum cn = ColumnName!(STRUCT, N);
-			static if(cn != "rowid") {
-				fields ~= cn;
-				qms ~= "?";
+		enum L = (Fields!STRUCT).length;
+		static if(n == L) {
+			return(tuple());
+		} else {
+			enum NAME = (FieldNameTuple!STRUCT)[n];
+			enum CN = ColumnName!(STRUCT, NAME);
+			static if(CN == "rowid") {
+				return tuple(getFields!(STRUCT, n+1)(s, fields).expand);
+			} else {
+				fields ~= CN;
+				return tuple(s.tupleof[n], getFields!(STRUCT, n+1)(s, fields).expand);
 			}
 		}
-		return This("INSERT INTO " ~ TableName!STRUCT ~ "(" ~ join(fields, ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")");
+	}
+
+	public static auto insert(STRUCT)(STRUCT s) if(isAggregateType!STRUCT)
+	{
+		string[] fields;
+		auto t = getFields(s, fields);
+		auto qms = map!(a => "?")(fields);
+		return make!(Insert)("INSERT INTO " ~ TableName!STRUCT ~ "(" ~ join(fields, ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")", t);
 	}
 
 	///
 	unittest {
-		mixin TEST;
-		assert(QueryBuilder().insert!User() == "INSERT INTO User(name,len) VALUES(?,?)");
-	}
-
-
-
-	/** Generate the start of a $(B SELECT) statement for selecting the given fields. */
-	public Selection!(FIELD) select(FIELD...)() if(allString!FIELD) {
-		return Selection!(FIELD)();
-
-	}
-
-	private static string[] fieldNames(TABLES...)()
-	{
-		string[] fields;
-		foreach(T ; TABLES) {
-			foreach(F ; FieldNameTuple!T) {
-				fields ~= ColumnName!(T, F);
-			}
-		}
-		return fields;
+		User u = { name : "jonas", age : 13 };
+		Message m  = { contents : "some text" };
+		assert(QueryBuilder.insert(u) == "INSERT INTO User(name,age) VALUES(?,?)");
+		assert(QueryBuilder.insert(m) == "INSERT INTO msg(contents) VALUES(?)");
 	}
 
 	///
-	unittest {
-		mixin TEST;
-		import std.stdio;
-
-		writeln(QueryBuilder().select!"name".from!User);
+	public static auto select(STRING...)()
+	{
+		auto sql = "SELECT " ~ join([STRING], ", ");
+		return make!(Select, [STRING])(sql, tuple());
 	}
 
+	unittest {
+		assert(QueryBuilder.select!("only_one") == "SELECT only_one");
+		assert(QueryBuilder.select!("hey", "you") == "SELECT hey, you");
+	}
 
-	/// SELECT all FROM
-	public This selectAllFrom(T...)()
+	///
+	public static auto selectAllFrom(STRUCTS...)()
 	{
 		string[] fields;
 		string[] tables;
-		foreach(I, Ti ; T) {
+		foreach(I, Ti ; STRUCTS) {
 			enum TABLE = TableName!Ti;
 
 			alias NAMES = FieldNameTuple!Ti;
@@ -252,49 +238,128 @@ struct QueryBuilder
 
 			tables ~= TABLE;
 		}
-		return This("SELECT " ~ join(fields, ",") ~ " FROM " ~ join(tables, ","));
+		auto sql = "SELECT " ~ join(fields, ", ") ~ " FROM " ~ join(tables, ",");
+		return make!(From, [])(sql, tuple());
 	}
 
+	unittest {
+		assert(QueryBuilder.selectAllFrom!(Message, User) == "SELECT msg.rowid, msg.contents, User.name, User.age FROM msg,User");
+	}
 
 	///
-	unittest {
-		mixin TEST;
-		import std.stdio;
-		writeln(QueryBuilder().selectAllFrom!(Message,User,MyData)());
-	}
-
-	@property public This from(T...)()
+	public auto from(TABLES...)() if(STATE == Select && allString!TABLES)
 	{
+		sql = sql ~ " FROM " ~ join([TABLES], ",");
+
+		return make!(From, SELECTS)(sql, args);
+	}
+
+	///
+	public auto from(TABLES...)() if(STATE == Select && allAggregate!TABLES)
+	{
+		static assert(checkFields!(SELECTS, TABLES), "Not all selected fields match column names");
 		string[] tables;
-		foreach(I, Ti ; T) {
-			tables ~= TableName!Ti.stringof;
+		foreach(T ; TABLES) {
+			tables ~= TableName!T;
 		}
-		return This(sql ~ " FROM " ~ join(tables, ","));
+		sql = sql ~ " FROM " ~ join(tables, ",");
+		return make!(From, SELECTS)(sql, args);
 	}
 
-	public This where(string T)() {
-		return This(sql ~ " WHERE " ~ T);
+	///
+	public auto set(string what, A...)(A a) if(STATE == Update)
+	{
+		mixin VerifyParams!(what, A);
+		return make!(Set)(sql ~ " SET " ~ what, tuple(a));
 	}
 
-} // QueryBuilder
+	///
+	public static auto update(string table)()
+	{
+		return make!(Update)("UPDATE " ~ table, tuple());
+	}
 
+	public static auto update(STRUCT)(STRUCT s)
+	{
+		string[] fields;
+		auto t = getFields(s, fields);
+		return make!(Set)("UPDATE " ~ TableName!STRUCT ~ " SET " ~ join(fields, "=?, ") ~ "=?", t);
+	}
+
+	unittest {
+		User user = { name : "Jonas", age : 34 };
+		assert(QueryBuilder.update(user) == "UPDATE User SET name=?, age=?");
+	}
+
+	///
+	public auto where(string what, A...)(A args) if(STATE == Set)
+	{
+		mixin VerifyParams!(what, A);
+		return make!(SetWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
+	}
+
+	///
+	public auto where(string what, A...)(A args) if(STATE == From)
+	{
+		mixin VerifyParams!(what, A);
+		return make!(SelectWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
+	}
+
+}
 
 ///
-unittest {
+unittest
+{
+	alias Q = QueryBuilder!(Empty);
+	alias C = ColumnName;
 
-	import std.stdio;
+	struct User {
+		string name;
+		int age;
+	}
 
-	mixin TEST;
+	assert(Q.create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, age INT)");
 
-	alias QB = QueryBuilder;
+	auto qb0 = Q.select!"name".from!User.where!"age=?"(12);
 
-	assert(QB().select!"content".from!Message.where!"idx == ?" == "SELECT content FROM Message WHERE idx == ?");
-	assert(QB().create!Message == "CREATE TABLE IF NOT EXISTS Message(id INT, content TEXT)");
+	// The properties `sql` and `bind` can be used to access the generated sql and the
+	// bound parameters
+	assert(qb0.sql == "SELECT name FROM User WHERE age=?");
+	assert(qb0.binds == tuple(12));
 
-	assert(__traits(compiles, QB().select!("id", "content").from!Message));
-	assert(!__traits(compiles, QB().select!("id", "conxtent").from!Message));
+	/// We can decorate structs and fields to give them different names in the database.
+	@sqlname("msg") struct Message {
+		@sqlname("rowid") int id;
+		string contents;
+	}
+
+	// Note that virtual "rowid" field is handled differently -- it will not be created
+	// by create(), and not inserted into by insert()
+
+	assert(Q.create!Message() == "CREATE TABLE IF NOT EXISTS msg(contents TEXT)");
+
+	Message m = { id : -1 /* Ingored */, contents : "Some message" };
+	auto qb = Q.insert(m);
+	assert(qb.sql == "INSERT INTO msg(contents) VALUES(?)");
+	assert(qb.binds == tuple("Some message"));
 
 
 }
 
+unittest
+{
+	import std.algorithm.iteration : uniq;
+	import std.algorithm.searching : count;
+	alias Q = QueryBuilder!(Empty);
+	alias C = ColumnName;
 
+	string[] sql = [
+		Q.select!("msg.rowid", "msg.contents").from!("msg").where!"msg.rowid=?"(1).sql,
+		Q.select!("msg.rowid", "msg.contents").from!Message.where!(C!(Message.id) ~ "=?")(1).sql,
+		Q.select!(C!(Message.id), C!(Message.contents)).from!Message.where!"msg.rowid=?"(1).sql,
+		Q.selectAllFrom!Message.where!"msg.rowid=?"(1).sql
+	];
+
+	assert(count(uniq(sql)) == 1);
+	
+}
