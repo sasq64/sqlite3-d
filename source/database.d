@@ -317,6 +317,11 @@ class Database
 			throw new db_exception("No match");
 	}
 
+	public T selectRow(T)(ulong row)
+	{
+		return selectOneWhere!(T, "rowid=?")(row);
+	}
+
 	unittest {
 		mixin TEST!("select");
 		import std.array;
@@ -334,9 +339,9 @@ class Database
 		assert(total.age == 55 + 91 + 27);
 	};
 
-	bool insert(T)(T row)
+	bool insert(int OPTION = OR.None, T)(T row)
 	{
-		auto qb = QB.insert(row);
+		auto qb = QB.insert!OPTION(row);
 		Query q;
 		try {
 			q = Query(db, qb);

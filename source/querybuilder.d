@@ -88,8 +88,8 @@ enum {
 	Select, Set, Empty, SetWhere, From, SelectWhere, Update, Create, Insert
 };
 
-enum OrAction {
-	Rollback, Abort, Replace, Fail, Ignore
+enum OR {
+	None, Rollback, Abort, Replace, Fail, Ignore
 }
 
 /** An instance of a query building process */
@@ -195,12 +195,16 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		}
 	}
 
-	public static auto insert(STRUCT)(STRUCT s) if(isAggregateType!STRUCT)
+	static const string[] options = [
+		"", "OR ROLLBACK ", "OR ABORT ", "OR REPLACE ", "OR FAIL "
+	];
+
+	public static auto insert(int OPTION = OR.None, STRUCT)(STRUCT s) if(isAggregateType!STRUCT)
 	{
 		string[] fields;
 		auto t = getFields(s, fields);
 		auto qms = map!(a => "?")(fields);
-		return make!(Insert)("INSERT INTO " ~ TableName!STRUCT ~ "(" ~ join(fields, ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")", t);
+		return make!(Insert)("INSERT " ~ options[OPTION] ~ "INTO " ~ TableName!STRUCT ~ "(" ~ join(fields, ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")", t);
 	}
 
 	///
@@ -277,6 +281,11 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 	public static auto update(string table)()
 	{
 		return make!(Update)("UPDATE " ~ table, tuple());
+	}
+
+	public static auto update(STRUCT)()
+	{
+		return make!(Update)("UPDATE " ~ TableName!STRUCT, tuple());
 	}
 
 	public static auto update(STRUCT)(STRUCT s)
