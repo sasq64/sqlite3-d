@@ -23,6 +23,19 @@ version(unittest)
 	}
 }
 
+static string quote(string s, string q = "'")
+{
+	return q ~ s ~ q;
+}
+
+static string[] quote(string[] s, string q = "'")
+{
+	string[] res;
+	foreach(t ; s)
+		res ~= q ~ t ~ q;
+	return res;
+}
+
 @property static bool allString(STRING...)() {
 	bool ok = true;
 	foreach(S ; STRING)
@@ -76,16 +89,16 @@ static template ColumnName(alias FIELDNAME)
 	else
 		enum CN = FIELDNAME.stringof;
 
-	enum ColumnName = TableName!(__traits(parent, FIELDNAME)) ~ "." ~ CN;
+	enum ColumnName = quote(TableName!(__traits(parent, FIELDNAME))) ~ "." ~ quote(CN);
 }
 
 unittest {
 	assert(ColumnName!(User, "age") == "age");
-	assert(tuple(ColumnName!(Message.contents), ColumnName!(User.age)) == tuple("msg.contents", "User.age"));
+	assert(tuple(ColumnName!(Message.contents), ColumnName!(User.age)) == tuple("'msg'.'contents'", "'User'.'age'"));
 }
 
 enum {
-	Select, Set, Empty, SetWhere, From, SelectWhere, Update, Create, Insert
+	Select, Set, Empty, SetWhere, From, SelectWhere, Update, Create, Insert, Delete
 };
 
 enum OR {
@@ -108,7 +121,8 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 			enum tableName = TableName!TABLE;
 			foreach(N ; FieldNameTuple!TABLE) {
 				enum colName = ColumnName!(TABLE,N);
-				ok |= ((colName == F) || (tableName ~ "." ~ colName == F)); 
+				ok |= ((colName == F) || (tableName ~ "." ~ colName == F)) 
+				|| ((quote(colName) == F) || (quote(tableName) ~ "." ~ quote(colName) == F));
 			}
 		}
 		return ok;
@@ -154,7 +168,7 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		foreach(I, N ; FieldNameTuple!STRUCT) {
 			alias colName = ColumnName!(STRUCT, N);
 			static if(colName != "rowid")
-				fields ~= colName ~ " " ~ sqlType!(FIELDS[I]);
+				fields ~= quote(colName) ~ " " ~ sqlType!(FIELDS[I]);
 			enum ATTRS = __traits(getAttributes, __traits(getMember, STRUCT, N));
 			foreach(A ; ATTRS)
 				static if(is(typeof(A) == sqlkey)) {
@@ -167,12 +181,12 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 
 		fields ~= keys;
 
-		return make!(Create)("CREATE TABLE IF NOT EXISTS " ~ TABLE ~ "(" ~ join(fields, ", ") ~ ")", tuple());
+		return make!(Create)("CREATE TABLE IF NOT EXISTS " ~ quote(TABLE) ~ "(" ~ join(fields, ", ") ~ ")", tuple());
 	}
 
 	///
 	unittest {
-		assert(QueryBuilder.create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, age INT)");
+		assert(QueryBuilder.create!User() == "CREATE TABLE IF NOT EXISTS 'User'('name' TEXT, 'age' INT)");
 		assert(!__traits(compiles, QueryBuilder().create!int));
 	}
 
@@ -204,15 +218,15 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		string[] fields;
 		auto t = getFields(s, fields);
 		auto qms = map!(a => "?")(fields);
-		return make!(Insert)("INSERT " ~ options[OPTION] ~ "INTO " ~ TableName!STRUCT ~ "(" ~ join(fields, ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")", t);
+		return make!(Insert)("INSERT " ~ options[OPTION] ~ "INTO " ~ quote(TableName!STRUCT) ~ "(" ~ join(quote(fields), ",") ~ ") VALUES(" ~ join(qms, ",") ~ ")", t);
 	}
 
 	///
 	unittest {
 		User u = { name : "jonas", age : 13 };
 		Message m  = { contents : "some text" };
-		assert(QueryBuilder.insert(u) == "INSERT INTO User(name,age) VALUES(?,?)");
-		assert(QueryBuilder.insert(m) == "INSERT INTO msg(contents) VALUES(?)");
+		assert(QueryBuilder.insert(u) == "INSERT INTO 'User'('name','age') VALUES(?,?)");
+		assert(QueryBuilder.insert(m) == "INSERT INTO 'msg'('contents') VALUES(?)");
 	}
 
 	///
@@ -237,17 +251,17 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 
 			alias NAMES = FieldNameTuple!Ti;
 			foreach(N ; NAMES) {
-				fields ~= TABLE ~ "." ~ ColumnName!(Ti, N);
+				fields ~= quote(TABLE) ~ "." ~ quote(ColumnName!(Ti, N));
 			}
 
 			tables ~= TABLE;
 		}
-		auto sql = "SELECT " ~ join(fields, ", ") ~ " FROM " ~ join(tables, ",");
+		auto sql = "SELECT " ~ join(fields, ", ") ~ " FROM " ~ join(quote(tables), ",");
 		return make!(From, [])(sql, tuple());
 	}
 
 	unittest {
-		assert(QueryBuilder.selectAllFrom!(Message, User) == "SELECT msg.rowid, msg.contents, User.name, User.age FROM msg,User");
+		assert(QueryBuilder.selectAllFrom!(Message, User) == "SELECT 'msg'.'rowid', 'msg'.'contents', 'User'.'name', 'User'.'age' FROM 'msg','User'");
 	}
 
 	///
@@ -266,7 +280,7 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		foreach(T ; TABLES) {
 			tables ~= TableName!T;
 		}
-		sql = sql ~ " FROM " ~ join(tables, ",");
+		sql = sql ~ " FROM " ~ join(quote(tables), ",");
 		return make!(From, SELECTS)(sql, args);
 	}
 
@@ -314,6 +328,32 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		return make!(SelectWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
 	}
 
+	public auto where(string what, A...)(A args) if(STATE == Delete)
+	{
+		mixin VerifyParams!(what, A);
+		return make!(SelectWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
+	}
+
+	public static auto delete_(TABLE)() if(isAggregateType!TABLE)
+	{
+		return make!(Delete)("DELETE FROM " ~ TableName!TABLE, tuple());
+	}
+
+	public static auto delete_(string tablename)()
+	{
+		return make!(Delete)("DELETE FROM " ~ tablename);
+	}
+
+	unittest {
+
+	struct User {
+		string name;
+		int age;
+	}
+
+		QueryBuilder.delete_!User.where!"name=?"("greg");
+
+	}
 }
 
 ///
@@ -327,13 +367,14 @@ unittest
 		int age;
 	}
 
-	assert(Q.create!User() == "CREATE TABLE IF NOT EXISTS User(name TEXT, age INT)");
+	assert(Q.create!User() == "CREATE TABLE IF NOT EXISTS 'User'('name' TEXT, 'age' INT)");
 
 	auto qb0 = Q.select!"name".from!User.where!"age=?"(12);
 
+	writeln(qb0);
 	// The properties `sql` and `bind` can be used to access the generated sql and the
 	// bound parameters
-	assert(qb0.sql == "SELECT name FROM User WHERE age=?");
+	assert(qb0.sql == "SELECT name FROM 'User' WHERE age=?");
 	assert(qb0.binds == tuple(12));
 
 	/// We can decorate structs and fields to give them different names in the database.
@@ -345,11 +386,11 @@ unittest
 	// Note that virtual "rowid" field is handled differently -- it will not be created
 	// by create(), and not inserted into by insert()
 
-	assert(Q.create!Message() == "CREATE TABLE IF NOT EXISTS msg(contents TEXT)");
+	assert(Q.create!Message() == "CREATE TABLE IF NOT EXISTS 'msg'('contents' TEXT)");
 
 	Message m = { id : -1 /* Ingored */, contents : "Some message" };
 	auto qb = Q.insert(m);
-	assert(qb.sql == "INSERT INTO msg(contents) VALUES(?)");
+	assert(qb.sql == "INSERT INTO 'msg'('contents') VALUES(?)");
 	assert(qb.binds == tuple("Some message"));
 
 
@@ -363,11 +404,14 @@ unittest
 	alias C = ColumnName;
 
 	string[] sql = [
-		Q.select!("msg.rowid", "msg.contents").from!("msg").where!"msg.rowid=?"(1).sql,
-		Q.select!("msg.rowid", "msg.contents").from!Message.where!(C!(Message.id) ~ "=?")(1).sql,
-		Q.select!(C!(Message.id), C!(Message.contents)).from!Message.where!"msg.rowid=?"(1).sql,
-		Q.selectAllFrom!Message.where!"msg.rowid=?"(1).sql
+		Q.select!("'msg'.'rowid'", "'msg'.'contents'").from!("'msg'").where!"'msg'.'rowid'=?"(1).sql,
+		Q.select!("'msg'.'rowid'", "'msg'.'contents'").from!Message.where!(C!(Message.id) ~ "=?")(1).sql,
+		Q.select!(C!(Message.id), C!(Message.contents)).from!Message.where!"'msg'.'rowid'=?"(1).sql,
+		Q.selectAllFrom!Message.where!"'msg'.'rowid'=?"(1).sql
 	];
+
+	foreach(s ; sql)
+		writeln(s);
 
 	assert(count(uniq(sql)) == 1);
 	

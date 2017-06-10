@@ -336,6 +336,7 @@ class Database
 		User[] users = array(db.selectAllWhere!(User, "age > ?")(20));
 		auto total = fold!((a,b) => User("", a.age + b.age))(users);
 	
+		writeln("##" ~ to!string(users.length) ~ " " ~ to!string(total));
 		assert(total.age == 55 + 91 + 27);
 	};
 
@@ -378,6 +379,20 @@ class Database
 unittest
 {
 	mixin TEST!"testdb";
+	struct Group {
+		int Group;
+	}
+
+	db.create!Group();
+	Group g = { 3 };
+	db.insert(g);
+	Group gg = db.selectOneWhere!(Group, "\"Group\"=3");
+	assert(gg.Group == g.Group);
+}
+
+unittest
+{
+	mixin TEST!"testdb";
 
 	db.create!User();
 
@@ -385,15 +400,12 @@ unittest
 	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "joker", 42);
 	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "rastapopoulos", 67);
 
-
 	auto q = db.query(QB.select!("name", "age").from!"user".where!"age == ?"(42));
 	//auto q = db.query("SELECT name, age FROM 'user' WHERE age == ?", 42);
-
 
 	string[] names;
 //	foreach(user ; db.select!User("where age > ?", 20))
 //		names ~= user.name;
-
 
 	assert(q.step());
 
@@ -410,7 +422,6 @@ unittest
 	writeln(qi.front());
 
 	assert(qi.front().id == m.id);
-
 
 	//QueryBuilder().select!("name", "page").from!User.where!"age == ?";
 

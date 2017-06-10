@@ -38,7 +38,7 @@ class MessageBoard
 		ulong timestamp;
 	}
 
-	@sqlname("msggroup") struct Group
+	struct Group
 	{
 		@sqlname("rowid") ulong id;
 		@sqlname("creatorid") ulong creator;
@@ -49,15 +49,15 @@ class MessageBoard
 	{
 		@sqlname("rowid") ulong id;
 		@sqlkey("message(rowid)") ulong firstMsg;
-		@sqlname("groupid") @sqlkey("msggroup(rowid)") ulong group;
+		@sqlname("groupid") @sqlkey("'Group'(rowid)") ulong group;
 		string name;
 		@sqlname("creatorid") ulong creator;
 	}
 
-	@sqlname("joinedgroups") struct JoinedGroup
+	struct JoinedGroup
 	{
 		ulong user;
-		@sqlkey("msggroup(rowid)") ulong groupid;
+		@sqlkey("'Group'(rowid)") ulong groupid;
 	}
 
 	alias BLOB = void[];
@@ -68,7 +68,6 @@ class MessageBoard
 		int highmsg;
 		void[] bits;
 	};
-
 
 	this(Database db, ulong userId)
 	{
@@ -90,7 +89,7 @@ class MessageBoard
 	void init()
 	{
 		import std.typetuple;
-		foreach(TABLE ; TypeTuple!(Group, Topic, Message, JoinedGroup, MsgBits))
+		foreach(TABLE ; AliasSeq!(Group, Topic, Message, JoinedGroup, MsgBits))
 			db.create!TABLE();
 	}
 
@@ -120,12 +119,12 @@ class MessageBoard
 	Group getGroup(ulong id) 
 	{
 		return db.selectRow!Group(id);
-	};
+	}
 
 	Group getGroup(string name) 
 	{
 		return db.selectOneWhere!(Group, "name=?")(name);
-	};
+	}
 
 	Group enterGroup(ulong id) 
 	{
@@ -133,7 +132,8 @@ class MessageBoard
 		return currentGroup;
 	}
 
-	Group enterGroup(string groupName) {
+	Group enterGroup(string groupName) 
+	{
 		currentGroup = getGroup(groupName);
 		return currentGroup;
 	}
@@ -141,7 +141,7 @@ class MessageBoard
 	Topic getTopic(ulong id)
 	{
 		return db.selectRow!Topic(id);
-	};
+	}
 
 	Message getMessage(ulong id)
 	{
@@ -255,7 +255,6 @@ class MessageBoard
 
 
 unittest {
-	writefln("HEY");
 	tryRemove("test.db");
 	auto db = new Database("test.db");
 	auto mb = new MessageBoard(db, 0);
@@ -263,7 +262,6 @@ unittest {
 	mb.setMessageRead(42, false);
 	assert(!mb.isMessageRead(42));
 	mb.flushBits();
-
 
 	db = new Database("test.db");
 	auto mb2 = new MessageBoard(db, 0);
@@ -277,7 +275,6 @@ unittest {
 
 	mb2.enterGroup("coding");
 	auto mid = mb2.post("First post", "test message");
-	writefln("MID %d", mid);
 	mb2.reply(mid, "And I am replying");
 	mb2.post("Second post", "test moar message");
 
