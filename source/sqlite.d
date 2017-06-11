@@ -1,10 +1,10 @@
 import std.typecons : RefCounted, tuple, Tuple;
 import std.traits;
-//import std.string;
+import std.string : toStringz;
 import std.conv : to;
 import core.stdc.string : strcmp ;
 import etc.c.sqlite3;
-//import std.stdio;
+import std.exception : enforce;
 
 import utils;
 pragma(lib, "sqlite3");
@@ -18,18 +18,17 @@ alias toz = std.string.toStringz;
 /// Setup code for tests
 mixin template TEST(string dbname)
 {
-	SQLiteDb db = () {
+	SQLite3 db = () {
 		tryRemove(dbname ~ ".db");
-		return new SQLiteDb(dbname ~ ".db");
+		return new SQLite3(dbname ~ ".db");
 	}();
 }
 
-/// An SQLITE3 database
-class SQLiteDb
+/// An sqlite3 database
+class SQLite3
 {
 	struct Statement
 	{
-		this(sqlite3_stmt *s) { this.s = s; }
 		~this() { if(s) sqlite3_finalize(s); s = null; } 
 		sqlite3_stmt* s = null;
 		alias s this;
@@ -79,11 +78,18 @@ class SQLiteDb
 
 		private T getArg(T)(int pos)
 		{
-			static if(isIntegral!T)
+			auto typ = sqlite3_column_type(stmt, pos);
+			static if(isIntegral!T) {
+				enforce!(db_exception)(typ == SQLITE_INTEGER,
+						"Column is not an integer");
 				return sqlite3_column_int(stmt, pos);
-			else static if(isSomeString!T)
+			} else static if(isSomeString!T) {
+				enforce!(db_exception)(typ == SQLITE3_TEXT,
+						"Column is not an string");
 				return to!string(sqlite3_column_text(stmt, pos));
-			else {
+			} else {
+				enforce!(db_exception)(typ == SQLITE_BLOB,
+						"Column is not a blob");
 				void* ptr = cast(void*)sqlite3_column_blob(stmt, pos);
 				int size = sqlite3_column_bytes(stmt, pos);
 				return ptr[0..size].dup;
@@ -104,32 +110,29 @@ class SQLiteDb
 			return -1;
 		}
 
-		// Get current row as the given type T;
-		// * if T is a struct, try to map each field to a column name and assign
-		// * if T is a typle of structs, do the above for each struct
-		// * if T is a tuple, assign each column to each type of the tuple
-
-		/** Get current row and map it to T.
-		  * - If T is a Fundamental type, get the single column as that type
-		  * - If T is an Aggregate type, try to map all column names to field names
-		  */
-		public T get(T, int COL = 0)()
+		// Get current row (and column) as a basic type
+		public T get(T, int COL = 0)() if(!(isAggregateType!T))
 		{
 			if(lastCode == -1)
 				step();
-			static if(isAggregateType!T) {
-				T t;
-				foreach(N ; FieldNameTuple!T) {
-					enum ATTRS = __traits(getAttributes, __traits(getMember, T, N));
-					static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
-						enum colName = ATTRS[0].name;
-					else
-						enum colName = N;
-					getArg(findName(colName), __traits(getMember, t, N));
-				}
-				return t;
-			} else
-				return getArg!T(COL);
+			return getArg!T(COL);
+		}
+
+		/// Map current row to the fields of the given STRUCT
+		public T get(T, int _ = 0)() if(isAggregateType!T)
+		{
+			if(lastCode == -1)
+				step();
+			T t;
+			foreach(N ; FieldNameTuple!T) {
+				enum ATTRS = __traits(getAttributes, __traits(getMember, T, N));
+				static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname))
+					enum colName = ATTRS[0].name;
+				else
+					enum colName = N;
+				getArg(findName(colName), __traits(getMember, t, N));
+			}
+			return t;
 		}
 
 		/// Get current row as a tuple
@@ -141,7 +144,7 @@ class SQLiteDb
 			return t;
 		}
 
-		/// Step the SQL statement, return `false` if there are no more rows
+		/// Step the SQL statement; move to next row of the result set. Return `false` if there are no more rows
 		public bool step()
 		{
 			lastCode = sqlite3_step(stmt);
@@ -149,6 +152,7 @@ class SQLiteDb
 			return (lastCode == SQLITE_ROW);
 		}
 
+		/// Reset the statement, to step through the resulting rows again.
 		public void reset()
 		{
 			sqlite3_reset(stmt);
@@ -182,7 +186,7 @@ class SQLiteDb
 
 		q = Query(db, "select a,b from TEST where b == ?");
 		q.bind(2);
-		assert(q.step());
+		// Try not stepping... assert(q.step());
 		assert(q.get!(int,int)() == tuple(1,2));
 
 		struct Test {
@@ -198,9 +202,18 @@ class SQLiteDb
 		q.reset();
 		assert(q.step());
 		assert(q.get!(int, int)() == tuple(1,2));
+
+		// Test exception
+		bool caught = false;
+		try {
+			q.get!(string);
+		} catch(db_exception e) {
+			caught = true;
+		}
+		assert(caught);
 	}
 
-	/** Create a SQLiteDb from a database file. If file does not exist, the
+	/** Create a SQLite3 from a database file. If file does not exist, the
 	  * database will be initialized as new
 	 */
 	public this(string dbFile)
@@ -280,6 +293,20 @@ class SQLiteDb
 	auto commit() { return exec("commit"); }
 	auto begin() { return exec("begin"); }
 	auto rollback() { return exec("rollback"); }
+
+	unittest {
+		mixin TEST!"transaction";
+		db.begin();
+		assert(db.exec("CREATE TABLE MyTable(name STRING)"));
+		assert(db.exec("INSERT INTO MyTable VALUES (?)", "hey"));
+		db.rollback();
+		assert(!db.hasTable("MyTable"));
+		db.begin();
+		assert(db.exec("CREATE TABLE MyTable(name STRING)"));
+		assert(db.exec("INSERT INTO MyTable VALUES (?)", "hey"));
+		db.commit();
+		assert(db.hasTable("MyTable"));
+	}
 
 	protected sqlite3 *db;
 	alias db this;

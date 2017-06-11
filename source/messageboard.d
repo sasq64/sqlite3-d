@@ -1,10 +1,6 @@
-import std.bitmanip;
-import std.typecons;
-import std.file;
-import std.stdio;
-import std.datetime;
-import std.array;
-import std.traits;
+import std.bitmanip : BitArray;
+import std.datetime : Clock, UTC;
+import std.array : array;
 
 import querybuilder;
 import database;
@@ -281,13 +277,13 @@ unittest {
 
 	auto topics = mb2.listTopics(gid);
 	assert(topics[0].name == "First post" && topics[1].name == "Second post");
-	foreach(topic ; mb2.listTopics(gid)) {
-		writefln("%s", topic.name);
-	}
+	//foreach(topic ; mb2.listTopics(gid)) {
+	//	writefln("%s", topic.name);
+	//}
 
 	auto ml = mb2.listMessages(1);
-	foreach(t ; ml)
-		writefln("Text: %s", t.text);
+	//foreach(t ; ml)
+	//	writefln("Text: %s", t.text);
 }
 
 

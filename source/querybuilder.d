@@ -1,9 +1,6 @@
-import std.typecons;
 import std.traits;
-import std.string;
-import std.conv;
-import std.meta;
-import std.stdio;
+import std.typecons : tuple, Tuple ;
+import std.string : join, countchars ;
 import std.algorithm.iteration : map;
 import std.array : array;
 import utils : sqlname;
@@ -371,7 +368,6 @@ unittest
 
 	auto qb0 = Q.select!"name".from!User.where!"age=?"(12);
 
-	writeln(qb0);
 	// The properties `sql` and `bind` can be used to access the generated sql and the
 	// bound parameters
 	assert(qb0.sql == "SELECT name FROM 'User' WHERE age=?");
@@ -410,8 +406,8 @@ unittest
 		Q.selectAllFrom!Message.where!"'msg'.'rowid'=?"(1).sql
 	];
 
-	foreach(s ; sql)
-		writeln(s);
+	//foreach(s ; sql)
+	//	writeln(s);
 
 	assert(count(uniq(sql)) == 1);
 	

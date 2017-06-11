@@ -1,17 +1,6 @@
-import std.typecons;
-import std.traits;
-import std.string;
-import std.conv;
-import std.stdio;
-import std.meta;
-
+import utils : tryRemove, sqlname;
 import sqlite;
 import querybuilder;
-import utils : tryRemove, sqlname;
-
-alias QB = QueryBuilder!(Empty);
-
-alias db_exception = sqlite.db_exception;
 
 /// Setup code for tests
 mixin template TEST(string dbname)
@@ -33,9 +22,12 @@ mixin template TEST(string dbname)
 	}();
 }
 
+alias db_exception = sqlite.db_exception;
+
 /// An Database with query building capabilities
-class Database : SQLiteDb
+class Database : SQLite3
 {
+	alias QB = QueryBuilder!(Empty);
 	// Returned from select-type methods where the row type is known
 	struct QueryIterator(T)
 	{
@@ -89,8 +81,8 @@ class Database : SQLiteDb
 
 	unittest {
 		mixin TEST!("select");
-		import std.array;
-		import std.algorithm.iteration;
+		import std.array : array;
+		import std.algorithm.iteration : fold;
 	
 		db.create!User();
 		db.insert(User("jonas", 55));
@@ -101,23 +93,30 @@ class Database : SQLiteDb
 		User[] users = array(db.selectAllWhere!(User, "age > ?")(20));
 		auto total = fold!((a,b) => User("", a.age + b.age))(users);
 	
-		writeln("##" ~ to!string(users.length) ~ " " ~ to!string(total));
 		assert(total.age == 55 + 91 + 27);
+
+		assert(db.selectOneWhere!(User, "age == ?")(27).name == "maria");
+
+		assert(db.selectRow!User(2).age == 91);
+
 	};
 
 	bool insert(int OPTION = OR.None, T)(T row)
 	{
 		auto qb = QB.insert!OPTION(row);
 		Query q;
-		try {
-			q = Query(db, qb);
-		} catch(db_exception dbe) {
-			if(!hasTable(TableName!T)) {
-				create!T();
+		if(autoCreateTable) {
+			try {
 				q = Query(db, qb);
-			} else
-				return false;
-		}
+			} catch(db_exception dbe) {
+				if(!hasTable(TableName!T)) {
+					create!T();
+					q = Query(db, qb);
+				} else
+					return false;
+			}
+		} else
+			q = Query(db, qb);
 
 		q.bind(qb.binds.expand);
 		return q.step();
@@ -138,6 +137,7 @@ class Database : SQLiteDb
 
 unittest
 {
+	// Test quoting by using keyword as table and column name
 	mixin TEST!"testdb";
 	struct Group {
 		int Group;
@@ -149,45 +149,4 @@ unittest
 	Group gg = db.selectOneWhere!(Group, "\"Group\"=3");
 	assert(gg.Group == g.Group);
 }
-
-unittest
-{
-	mixin TEST!"testdb";
-
-	db.create!User();
-
-	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "spacey", 15);
-	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "joker", 42);
-	db.exec("INSERT INTO 'user' (name, age) VALUES (?,?)", "rastapopoulos", 67);
-
-	auto q = db.query(QB.select!("name", "age").from!"user".where!"age == ?"(42));
-	//auto q = db.query("SELECT name, age FROM 'user' WHERE age == ?", 42);
-
-	string[] names;
-//	foreach(user ; db.select!User("where age > ?", 20))
-//		names ~= user.name;
-
-	assert(q.step());
-
-	auto u = q.get!User;
-	assert(u.name == "joker" && u.age == 42);
-
-	db.create!Message();
-	Message m = { -1, "Some text", 11 };
-	db.insert(m);
-	m.id = cast(int)db.lastRowid();
-	writeln(m.id);
-
-	auto qi = db.selectAllWhere!(Message, "byUser == ?")(11);
-	writeln(qi.front());
-
-	assert(qi.front().id == m.id);
-
-	//QueryBuilder().select!("name", "page").from!User.where!"age == ?";
-
-	//auto t2 = q.get!(string, int);
-	//assert(t[0] == "joker");
-	//assert(!q.step());
-}
-
 
