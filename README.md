@@ -92,8 +92,23 @@ db.exec(Q.create!User());
 db.exec(Q.insert(user));
 
 // Generate a SELECT statement and create a query from it;
-auto query = db.query(Q.select!"name".from!User.where!"age>?"(30);
-// (Fields are checked against tables, so if "name" had been misspelled
-// the above would not compile).
+auto query = db.query(Q.select!"name".from!User.where!"age>?"(30));
+// (Column names are checked against field in structs , so if "name" had been
+// misspelled the above would not compile).
 ```
 
+DATABASE
+========
+
+Putting it together;
+
+```D
+    auto db = new Database("test.db");
+
+    User user = { name : "jake", age : 45 };
+
+    db.insert(user); // Rely on auto table creation
+
+    User[] users = array(db.selectAllWhere!(User, "age > ?")(30));
+
+```
