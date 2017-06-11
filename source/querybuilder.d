@@ -6,8 +6,8 @@ import std.meta;
 import std.stdio;
 import std.algorithm.iteration : map;
 import std.array : array;
+import utils : sqlname;
 
-struct sqlname { string name; }
 struct sqlkey { string key; }
 
 version(unittest)

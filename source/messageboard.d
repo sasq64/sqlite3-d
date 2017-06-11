@@ -8,6 +8,7 @@ import std.traits;
 
 import querybuilder;
 import database;
+import utils : tryRemove, sqlname ;
 
 alias QB = QueryBuilder!(Empty);
 
