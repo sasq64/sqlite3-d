@@ -3,7 +3,7 @@ import std.typecons : tuple, Tuple ;
 import std.string : join, countchars ;
 import std.algorithm.iteration : map;
 import std.array : array;
-import utils : sqlname;
+import utils;
 
 struct sqlkey { string key; }
 
@@ -20,41 +20,8 @@ version(unittest)
 	}
 }
 
-static string quote(string s, string q = "'")
-{
-	return q ~ s ~ q;
-}
 
-static string[] quote(string[] s, string q = "'")
-{
-	string[] res;
-	foreach(t ; s)
-		res ~= q ~ t ~ q;
-	return res;
-}
-
-@property static bool allString(STRING...)() {
-	bool ok = true;
-	foreach(S ; STRING)
-		static if(is(S))
-		ok = false;
-	else
-		ok &= isSomeString!(typeof(S));
-	return ok;
-}
-
-@property static bool allAggregate(ARGS...)() {
-	bool ok = true;
-	foreach(A ; ARGS)
-		static if(is(A))
-		ok &= isAggregateType!A;
-	else
-		ok = false;
-	return ok;
-}
-
-
-/// Get the tablename of a STRUCT
+/// Get the tablename of `STRUCT`
 static template TableName(STRUCT) {
 	enum ATTRS = __traits(getAttributes, STRUCT);
 	static if(ATTRS.length > 0 && is(typeof(ATTRS[0]) == sqlname)) {
@@ -62,8 +29,11 @@ static template TableName(STRUCT) {
 	} else
 		enum TableName = STRUCT.stringof;
 };
-
+///
 unittest {
+	struct User { string name; } 
+	@sqlname("msg") struct Message { }
+
 	assert(TableName!User == "User");
 	assert(TableName!Message == "msg");
 }
@@ -88,10 +58,12 @@ static template ColumnName(alias FIELDNAME)
 
 	enum ColumnName = quote(TableName!(__traits(parent, FIELDNAME))) ~ "." ~ quote(CN);
 }
-
+///
 unittest {
+	struct User { int age; } 
+	@sqlname("msg") struct Message { @sqlname("txt") string contents; }
 	assert(ColumnName!(User, "age") == "age");
-	assert(tuple(ColumnName!(Message.contents), ColumnName!(User.age)) == tuple("'msg'.'contents'", "'User'.'age'"));
+	assert(tuple(ColumnName!(Message.contents), ColumnName!(User.age)) == tuple("'msg'.'txt'", "'User'.'age'"));
 }
 
 enum {
@@ -109,7 +81,6 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 	public string sql;
 	alias sql this;
 
-	//@property public string text() { return sql; }
 	@property public BINDS binds() { return args; }
 
 	private static bool checkField(string F, TABLES...)() {
@@ -150,7 +121,6 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 
 	this(string sql, BINDS args)
 	{
-		//pragma(msg, BINDS);
 		this.sql = sql;
 		this.args = args;
 	}
@@ -232,7 +202,7 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		auto sql = "SELECT " ~ join([STRING], ", ");
 		return make!(Select, [STRING])(sql, tuple());
 	}
-
+	///
 	unittest {
 		assert(QueryBuilder.select!("only_one") == "SELECT only_one");
 		assert(QueryBuilder.select!("hey", "you") == "SELECT hey, you");
@@ -256,7 +226,7 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		auto sql = "SELECT " ~ join(fields, ", ") ~ " FROM " ~ join(quote(tables), ",");
 		return make!(From, [])(sql, tuple());
 	}
-
+	///
 	unittest {
 		assert(QueryBuilder.selectAllFrom!(Message, User) == "SELECT 'msg'.'rowid', 'msg'.'contents', 'User'.'name', 'User'.'age' FROM 'msg','User'");
 	}
@@ -294,18 +264,20 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		return make!(Update)("UPDATE " ~ table, tuple());
 	}
 
+	///
 	public static auto update(STRUCT)()
 	{
 		return make!(Update)("UPDATE " ~ TableName!STRUCT, tuple());
 	}
 
+	///
 	public static auto update(STRUCT)(STRUCT s)
 	{
 		string[] fields;
 		auto t = getFields(s, fields);
 		return make!(Set)("UPDATE " ~ TableName!STRUCT ~ " SET " ~ join(fields, "=?, ") ~ "=?", t);
 	}
-
+	///
 	unittest {
 		User user = { name : "Jonas", age : 34 };
 		assert(QueryBuilder.update(user) == "UPDATE User SET name=?, age=?");
@@ -325,31 +297,27 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 		return make!(SelectWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
 	}
 
+	///
 	public auto where(string what, A...)(A args) if(STATE == Delete)
 	{
 		mixin VerifyParams!(what, A);
 		return make!(SelectWhere, SELECTS)(sql ~ " WHERE " ~ what, tuple(this.args.expand, args));
 	}
 
+	///
 	public static auto delete_(TABLE)() if(isAggregateType!TABLE)
 	{
 		return make!(Delete)("DELETE FROM " ~ TableName!TABLE, tuple());
 	}
 
+	///
 	public static auto delete_(string tablename)()
 	{
 		return make!(Delete)("DELETE FROM " ~ tablename);
 	}
-
+	///
 	unittest {
-
-	struct User {
-		string name;
-		int age;
-	}
-
 		QueryBuilder.delete_!User.where!"name=?"("greg");
-
 	}
 }
 
@@ -359,6 +327,7 @@ unittest
 	alias Q = QueryBuilder!(Empty);
 	alias C = ColumnName;
 
+	// This will map to a "User" table in our database
 	struct User {
 		string name;
 		int age;
@@ -399,16 +368,12 @@ unittest
 	alias Q = QueryBuilder!(Empty);
 	alias C = ColumnName;
 
+	// Make sure all these generate the same sql statement
 	string[] sql = [
 		Q.select!("'msg'.'rowid'", "'msg'.'contents'").from!("'msg'").where!"'msg'.'rowid'=?"(1).sql,
 		Q.select!("'msg'.'rowid'", "'msg'.'contents'").from!Message.where!(C!(Message.id) ~ "=?")(1).sql,
 		Q.select!(C!(Message.id), C!(Message.contents)).from!Message.where!"'msg'.'rowid'=?"(1).sql,
 		Q.selectAllFrom!Message.where!"'msg'.'rowid'=?"(1).sql
 	];
-
-	//foreach(s ; sql)
-	//	writeln(s);
-
 	assert(count(uniq(sql)) == 1);
-	
 }

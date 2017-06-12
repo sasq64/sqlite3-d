@@ -1,12 +1,12 @@
 {
-	"name": "sqlite3if",
+	"name": "sqlite3",
 	"authors": [
 		"Jonas Minnberg"
 	],
-	"description": "sqlite3 Interface",
+	"description": "SQLite3 interface, designed with simplicity and compile time verification in mind. ",
 	"copyright": "Copyright © 2017, Jonas Minnberg",
 	"license": "MIT",
-
+	"hompage" : "https://github.com/sasq64/sqlite3-d",
 	"libs": [ "sqlite3" ]
 
 }

@@ -50,11 +50,13 @@ class SQLite3
 			stmt.s = s;
 		}
 
-		private int bindArg(int pos, string arg) {
+		private int bindArg(int pos, string arg) 
+		{
 			return sqlite3_bind_text(stmt, pos, arg.ptr, cast(int)arg.length, null); 
 		}
 
-		private int bindArg(int pos, double arg) {
+		private int bindArg(int pos, double arg) 
+		{
 			return sqlite3_bind_double(stmt, pos, arg);
 		}
 
@@ -62,7 +64,8 @@ class SQLite3
 			return sqlite3_bind_int64(stmt, pos, arg);
 		}
 
-		private int bindArg(int pos, void[] arg) {
+		private int bindArg(int pos, void[] arg)
+		{
 			return sqlite3_bind_blob(stmt, pos, arg.ptr, cast(int)arg.length, null);
 		}
 
@@ -101,7 +104,9 @@ class SQLite3
 			t = getArg!(T)(pos);
 		}
 
-		private int findName(string name) {
+		// Find column by name
+		private int findName(string name)
+		{
 			auto zname = toz(name);
 			for(int i=0; i<sqlite3_column_count(stmt); i++) {
 				if(strcmp(sqlite3_column_name(stmt, i), zname) == 0)
@@ -110,7 +115,7 @@ class SQLite3
 			return -1;
 		}
 
-		// Get current row (and column) as a basic type
+		/// Get current row (and column) as a basic type
 		public T get(T, int COL = 0)() if(!(isAggregateType!T))
 		{
 			if(lastCode == -1)
@@ -275,6 +280,7 @@ class SQLite3
 		assert(db.lastRowid() == 2);
 	}
 
+	/// Create query from string and args to bind
 	public Query query(ARGS...)(string sql, ARGS args)
 	{
 		auto q = Query(db, sql);
@@ -282,11 +288,11 @@ class SQLite3
 		return q;
 	}
 
+	/// Create query from QueryBuilder like class
 	public Query query(SOMEQUERY)(SOMEQUERY sq) if(hasMember!(SOMEQUERY, "sql") && hasMember!(SOMEQUERY, "binds"))
 	{
 		auto q = Query(db, sq.sql);
 		q.bind(sq.binds.expand);
-		//auto q = Query(db, "select name from user");
 		return q;
 	}
 
