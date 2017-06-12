@@ -3,10 +3,11 @@
 	"authors": [
 		"Jonas Minnberg"
 	],
-	"description": "SQLite3 interface, designed with simplicity and compile time verification in mind. ",
+	"description": "SQLite3 interface, designed with simplicity and compile time verification in mind.",
 	"copyright": "Copyright © 2017, Jonas Minnberg",
 	"license": "MIT",
 	"hompage" : "https://github.com/sasq64/sqlite3-d",
+	"targetType" : "library",
 	"libs": [ "sqlite3" ]
 
 }
