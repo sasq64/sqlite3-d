@@ -42,12 +42,13 @@ class SQLite3
 		public int lastCode = -1;
 	
 		/// Construct a query from the string 'sql' into database 'db'
-		this(sqlite3* db, string sql)			
+		this(ARGS...)(sqlite3* db, string sql, ARGS args)			
 		{
 			sqlite3_stmt* s = null;
 			int rc = sqlite3_prepare_v2(db, toz(sql), -1, &s, null);
 			checkError("Prepare failed: ", rc);
 			stmt.s = s;
+			bind(args);
 		}
 
 		private int bindArg(int pos, string arg) 
@@ -85,11 +86,15 @@ class SQLite3
 			static if(isIntegral!T) {
 				enforce!(db_exception)(typ == SQLITE_INTEGER,
 						"Column is not an integer");
-				return sqlite3_column_int(stmt, pos);
+				return cast(T)sqlite3_column_int64(stmt, pos);
 			} else static if(isSomeString!T) {
 				enforce!(db_exception)(typ == SQLITE3_TEXT,
 						"Column is not an string");
 				return to!string(sqlite3_column_text(stmt, pos));
+			} else static if(isFloat!T) {
+				enforce!(db_exception)(typ == SQLITE_REAL,
+						"Column is not an real");
+				return sqlite3_column_double(stmt, pos);
 			} else {
 				enforce!(db_exception)(typ == SQLITE_BLOB,
 						"Column is not a blob");
@@ -183,14 +188,12 @@ class SQLite3
 		q = Query(db, "insert into TEST values(?, ?)");
 		q.bind(1,2);
 		assert(!q.step());
-		q = Query(db, "select b from TEST where a == ?");
-		q.bind(1);
+		q = Query(db, "select b from TEST where a == ?", 1);
 		assert(q.step());
 		assert(q.get!int() == 2);
 		assert(!q.step());
 
-		q = Query(db, "select a,b from TEST where b == ?");
-		q.bind(2);
+		q = Query(db, "select a,b from TEST where b == ?", 2);
 		// Try not stepping... assert(q.step());
 		assert(q.get!(int,int)() == tuple(1,2));
 
