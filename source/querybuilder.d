@@ -1,6 +1,6 @@
 import std.traits;
 import std.typecons : tuple, Tuple ;
-import std.string : join, countchars ;
+import std.string : join;
 import std.algorithm.iteration : map;
 import std.array : array;
 import utils;
@@ -20,6 +20,16 @@ version(unittest)
 	}
 }
 
+static size_t countChars(string s, char c) {
+	size_t matches = 0;
+	foreach (character; s) {
+		if (character == c) {
+			matches++;
+		}
+	}
+
+	return matches;
+}
 
 /// Get the tablename of `STRUCT`
 static template TableName(STRUCT) {
@@ -116,7 +126,7 @@ struct QueryBuilder(int STATE = Empty, BINDS = Tuple!(), string[] SELECTS = [])
 
 	private mixin template VerifyParams(string what, ARGS...)
 	{
-		static assert(countchars(what, "?") == A.length, "Incorrect number parameters");
+		static assert(countChars(what, '?') == A.length, "Incorrect number parameters: ");
 	}
 
 	this(string sql, BINDS args)

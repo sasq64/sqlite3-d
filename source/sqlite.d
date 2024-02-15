@@ -13,7 +13,7 @@ class db_exception : Exception {
 	this(string msg, string file = __FILE__, size_t line = __LINE__) { super(msg, file, line); }
 };
 
-alias toz = std.string.toStringz;
+alias toz = toStringz;
 
 /// Setup code for tests
 mixin template TEST(string dbname)
